@@ -65,5 +65,6 @@ func (c *Calibre) PreviewCommands(job domain.ConvertJob) ports.CommandPreview {
 }
 
 func (c *Calibre) args(job domain.ConvertJob) []string {
-	return []string{job.InputPath, job.OutputPath}
+	args := []string{job.InputPath, job.OutputPath}
+	return append(args, extraArgs(job.Options.ToolOptions, "calibre")...)
 }

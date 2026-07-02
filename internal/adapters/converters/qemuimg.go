@@ -49,7 +49,12 @@ func (c *QemuImg) PreviewCommands(job domain.ConvertJob) ports.CommandPreview {
 }
 
 func (c *QemuImg) args(job domain.ConvertJob) []string {
-	return []string{"convert", "-O", qemuFormat(job.OutputFormat), job.InputPath, job.OutputPath}
+	args := []string{"convert", "-O", qemuFormat(job.OutputFormat)}
+	if job.OutputFormat == domain.FormatQCOW2 && job.Options.Action == domain.ActionCompress {
+		args = append(args, "-c")
+	}
+	args = append(args, extraArgs(job.Options.ToolOptions, "qemu-img")...)
+	return append(args, job.InputPath, job.OutputPath)
 }
 
 func qemuFormat(format domain.Format) string {

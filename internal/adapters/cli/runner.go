@@ -9,6 +9,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/shellcell/convert/internal/adapters/toolconfig"
@@ -82,6 +83,7 @@ func (r *Runner) Run(ctx context.Context, args []string) int {
 		return 2
 	}
 
+	start := time.Now()
 	var report app.RunReport
 	if interactive {
 		report, err = r.service.Interactive(ctx, app.InteractiveRequest{
@@ -94,6 +96,7 @@ func (r *Runner) Run(ctx context.Context, args []string) int {
 			Quality:      req.Quality,
 			Action:       req.Action,
 			Resize:       req.Resize,
+			ToolOptions:  req.ToolOptions,
 		})
 	} else {
 		report, err = r.service.Convert(ctx, app.ConvertRequest{
@@ -106,6 +109,7 @@ func (r *Runner) Run(ctx context.Context, args []string) int {
 			Quality:      req.Quality,
 			Action:       req.Action,
 			Resize:       req.Resize,
+			ToolOptions:  req.ToolOptions,
 		})
 	}
 	if err != nil {
@@ -124,7 +128,7 @@ func (r *Runner) Run(ctx context.Context, args []string) int {
 		}
 	}
 
-	r.printReport(report)
+	r.printReport(report, time.Since(start))
 	if err != nil || report.HasFailures() {
 		return 1
 	}
@@ -142,6 +146,7 @@ type parsedRequest struct {
 	Quality      int
 	Action       domain.TransformAction
 	Resize       string
+	ToolOptions  domain.ToolOptions
 }
 
 func (r *Runner) parse(args []string) (parsedRequest, bool, error) {
@@ -158,6 +163,11 @@ func (r *Runner) parse(args []string) (parsedRequest, bool, error) {
 	actionFlag := flags.String("action", "", "same-format action: convert, compress, or resize")
 	compress := flags.Bool("compress", false, "compress same-format image output")
 	resize := flags.String("resize", "", "resize value for supported image backends, for example 800x or 50%")
+
+	toolOptions := domain.ToolOptions{}
+	flags.Func("opt", "backend option as tool.key=value, repeatable (example: ffmpeg.audio_bitrate=320k)", func(value string) error {
+		return parseToolOption(toolOptions, value)
+	})
 
 	if err := flags.Parse(args); err != nil {
 		return parsedRequest{}, false, err
@@ -201,6 +211,7 @@ func (r *Runner) parse(args []string) (parsedRequest, bool, error) {
 		Quality:      *quality,
 		Action:       action,
 		Resize:       *resize,
+		ToolOptions:  toolOptions,
 	}
 
 	if len(positional) == 0 {
@@ -252,6 +263,27 @@ func (r *Runner) parse(args []string) (parsedRequest, bool, error) {
 	}
 }
 
+// parseToolOption parses "tool.key=value" (or "tool:key=value") flag values
+// into the shared ToolOptions map; repeated keys append.
+func parseToolOption(options domain.ToolOptions, value string) error {
+	pair := strings.SplitN(value, "=", 2)
+	if len(pair) != 2 || strings.TrimSpace(pair[1]) == "" {
+		return fmt.Errorf("invalid option %q; use tool.key=value", value)
+	}
+	name := strings.TrimSpace(pair[0])
+	separator := strings.IndexAny(name, ".:")
+	if separator <= 0 || separator == len(name)-1 {
+		return fmt.Errorf("invalid option %q; use tool.key=value", value)
+	}
+	tool := strings.ToLower(strings.TrimSpace(name[:separator]))
+	key := strings.ToLower(strings.TrimSpace(name[separator+1:]))
+	if options[tool] == nil {
+		options[tool] = map[string][]string{}
+	}
+	options[tool][key] = append(options[tool][key], strings.TrimSpace(pair[1]))
+	return nil
+}
+
 func parseAction(value string) (domain.TransformAction, error) {
 	switch strings.TrimSpace(strings.ToLower(value)) {
 	case "":
@@ -299,8 +331,11 @@ func (r *Runner) printUsageTo(w io.Writer) {
 	fmt.Fprintln(w, "      --overwrite      overwrite existing output files")
 	fmt.Fprintln(w, "      --quality        best-effort quality value for supported backends")
 	fmt.Fprintln(w, "      --compress       compress same-format image output")
-	fmt.Fprintln(w, "      --resize         resize value for supported image backends")
+	fmt.Fprintln(w, "      --resize         resize value for supported image and video backends")
 	fmt.Fprintln(w, "      --action         same-format action: convert, compress, or resize")
+	fmt.Fprintln(w, "      --opt            backend option as tool.key=value, repeatable")
+	fmt.Fprintln(w, "                       examples: ffmpeg.audio_bitrate=320k, 7z.level=9,")
+	fmt.Fprintln(w, "                       structured.text_style=raw, imagemagick.args=\"-sharpen 0x1\"")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Commands:")
 	fmt.Fprintln(w, "  doctor    check external converter dependencies")
@@ -534,7 +569,7 @@ func (r *Runner) printBackends() {
 	}
 }
 
-func (r *Runner) printReport(report app.RunReport) {
+func (r *Runner) printReport(report app.RunReport, elapsed time.Duration) {
 	fmt.Fprintln(r.stdout, r.titleStyle.Render("Status report"))
 	if len(report.Items) == 0 {
 		fmt.Fprintln(r.stdout, r.dimStyle.Render("  No work was performed."))
@@ -562,11 +597,12 @@ func (r *Runner) printReport(report app.RunReport) {
 
 	fmt.Fprintf(
 		r.stdout,
-		"\n%s %d converted, %d skipped, %d failed\n",
+		"\n%s %d converted, %d skipped, %d failed %s\n",
 		r.titleStyle.Render("Summary:"),
 		report.Count(app.StatusConverted),
 		report.Count(app.StatusSkipped),
 		report.Count(app.StatusFailed),
+		r.dimStyle.Render("in "+elapsed.Round(10*time.Millisecond).String()),
 	)
 }
 

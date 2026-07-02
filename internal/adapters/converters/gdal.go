@@ -12,8 +12,10 @@ type GDAL struct {
 	caps   []domain.ConversionCapability
 }
 
+// NewGDAL declares vector translation pairs. TopoJSON, OSM, and PBF drivers
+// are read-only in GDAL, so they appear as inputs but never as outputs.
 func NewGDAL(runner ports.CommandRunner) *GDAL {
-	formats := []domain.Format{
+	inputs := []domain.Format{
 		domain.FormatGeoJSON,
 		domain.FormatTopoJSON,
 		domain.FormatKML,
@@ -27,7 +29,18 @@ func NewGDAL(runner ports.CommandRunner) *GDAL {
 		domain.FormatCSV,
 		domain.FormatSQLite,
 	}
-	return &GDAL{runner: runner, caps: capabilities(formats, formats, 85, false, false)}
+	outputs := []domain.Format{
+		domain.FormatGeoJSON,
+		domain.FormatKML,
+		domain.FormatKMZ,
+		domain.FormatGPX,
+		domain.FormatSHP,
+		domain.FormatGPKG,
+		domain.FormatGML,
+		domain.FormatCSV,
+		domain.FormatSQLite,
+	}
+	return &GDAL{runner: runner, caps: capabilities(inputs, outputs, 85, false, false)}
 }
 
 func (c *GDAL) ID() string { return "gdal" }
@@ -55,6 +68,7 @@ func (c *GDAL) args(job domain.ConvertJob) []string {
 	if driver := gdalDriver(job.OutputFormat); driver != "" {
 		args = append(args, "-f", driver)
 	}
+	args = append(args, extraArgs(job.Options.ToolOptions, "gdal")...)
 	args = append(args, job.OutputPath, job.InputPath)
 	return args
 }
@@ -63,10 +77,10 @@ func gdalDriver(format domain.Format) string {
 	switch format {
 	case domain.FormatGeoJSON:
 		return "GeoJSON"
-	case domain.FormatTopoJSON:
-		return "TopoJSON"
 	case domain.FormatKML:
 		return "KML"
+	case domain.FormatKMZ:
+		return "LIBKML"
 	case domain.FormatGPKG:
 		return "GPKG"
 	case domain.FormatGML:

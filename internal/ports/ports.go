@@ -60,6 +60,10 @@ type CommandReview struct {
 	Message     string
 	Editable    bool
 	EditCommand string
+	// JobCount is the number of queued jobs this confirmation covers. A batch
+	// is confirmed once; values above 1 mean "the shown command plus similar
+	// commands for the remaining files".
+	JobCount int
 }
 
 type CommandOverrideConverter interface {
@@ -70,6 +74,23 @@ type FormatChoice struct {
 	Format    domain.Format
 	Available bool
 	Reason    string
+}
+
+// OptionSpec describes one tunable converter option that interactive mode
+// may offer before a conversion starts. Values land in
+// domain.ConvertOptions.ToolOptions under (Tool, Key).
+type OptionSpec struct {
+	Tool        string
+	Key         string
+	Title       string
+	Description string
+	Default     string
+}
+
+// OptionsAware converters declare tunable options for a conversion pair.
+// Returning nil means there is nothing to ask.
+type OptionsAware interface {
+	OptionSpecs(input domain.Format, output domain.Format) []OptionSpec
 }
 
 type OutputLocation string
@@ -103,6 +124,7 @@ type Prompt interface {
 	ConfirmCommand(ctx context.Context, review CommandReview) (CommandReviewAction, string, error)
 	AskOutputPath(ctx context.Context, currentPath string) (string, error)
 	AskOutputSize(ctx context.Context, defaultSize string) (string, error)
+	AskText(ctx context.Context, title string, description string, defaultValue string) (string, error)
 	AskResize(ctx context.Context) (string, error)
 	AskQuality(ctx context.Context, defaultQuality int) (int, error)
 }

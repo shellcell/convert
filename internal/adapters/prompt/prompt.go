@@ -15,6 +15,8 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/shellcell/convert/internal/domain"
 	"github.com/shellcell/convert/internal/ports"
+	"github.com/shellcell/convert/internal/scan"
+	"github.com/shellcell/convert/internal/shell"
 	"github.com/shellcell/convert/internal/theme"
 	"golang.org/x/term"
 )
@@ -136,26 +138,35 @@ func (p *Prompt) SelectArchiveAction(ctx context.Context, file domain.FileRef) (
 }
 
 func (p *Prompt) SelectSameFormatAction(ctx context.Context, format domain.Format) (domain.TransformAction, error) {
+	options := []selectPromptOption[domain.TransformAction]{
+		{Label: "Compress", Value: domain.ActionCompress},
+	}
+	// Resizing only means something for visual formats.
+	if format.IsImage() || format.IsVideo() {
+		options = append(options, selectPromptOption[domain.TransformAction]{Label: "Resize", Value: domain.ActionResize})
+	}
+	options = append(options, selectPromptOption[domain.TransformAction]{Label: "Convert/copy", Value: domain.ActionConvert})
+
 	if p.hasTerminal() {
-		return selectValueTerminal(ctx, p, "Input and output format match", "Choose what to do with "+format.String()+" files.", []selectPromptOption[domain.TransformAction]{
-			{Label: "Compress", Value: domain.ActionCompress},
-			{Label: "Resize", Value: domain.ActionResize},
-			{Label: "Convert/copy", Value: domain.ActionConvert},
-		})
+		return selectValueTerminal(ctx, p, "Input and output format match", "Choose what to do with "+format.String()+" files.", options)
 	}
 
 	fmt.Fprintln(p.out, p.titleStyle.Render("Input and output format match"))
-	fmt.Fprintf(p.out, "  %s %s %s\n", p.numberStyle.Render("1."), "Compress", p.badgeStyle.Render(format.String()))
-	fmt.Fprintf(p.out, "  %s %s\n", p.numberStyle.Render("2."), "Resize")
-	fmt.Fprintf(p.out, "  %s %s\n", p.numberStyle.Render("3."), "Convert/copy")
+	for i, option := range options {
+		badge := ""
+		if i == 0 {
+			badge = " " + p.badgeStyle.Render(format.String())
+		}
+		fmt.Fprintf(p.out, "  %s %s%s\n", p.numberStyle.Render(fmt.Sprintf("%d.", i+1)), option.Label, badge)
+	}
 	fmt.Fprint(p.out, p.promptStyle.Render("Action: "))
 
-	index, err := p.readSingleIndex(ctx, 3)
+	index, err := p.readSingleIndex(ctx, len(options))
 	if err != nil {
 		return "", err
 	}
 
-	return sameFormatActionFromIndex(index), nil
+	return options[index].Value, nil
 }
 
 func (p *Prompt) ConfirmOption(ctx context.Context, title string, description string, defaultValue bool) (bool, error) {
@@ -200,8 +211,14 @@ func (p *Prompt) ConfirmCommand(ctx context.Context, review ports.CommandReview)
 	}
 	options = append(options, selectPromptOption[ports.CommandReviewAction]{Label: "Cancel", Value: ports.CommandReviewCancel})
 
+	title := "Confirm conversion"
+	commandLabel := "Command:"
+	if review.JobCount > 1 {
+		title = fmt.Sprintf("Confirm conversion of %d files", review.JobCount)
+		commandLabel = "First command (the remaining files run the same way):"
+	}
 	command := p.commandReviewDescription(review)
-	selected, err := selectValueTerminal(ctx, p, "Confirm conversion", "Backend: "+review.Backend+"\nCommand:\n"+command, options)
+	selected, err := selectValueTerminal(ctx, p, title, "Backend: "+review.Backend+"\n"+commandLabel+"\n"+command, options)
 	if err != nil {
 		return "", "", err
 	}
@@ -294,10 +311,42 @@ func (p *Prompt) formatCommand(command ports.Command) string {
 }
 
 func promptShellQuote(value string) string {
-	if value == "" || strings.ContainsAny(value, " \t\n\"'\\$`;&|<>!*?[]{}()") {
-		return strconv.Quote(value)
+	return shell.Quote(value)
+}
+
+func (p *Prompt) AskText(ctx context.Context, title string, description string, defaultValue string) (string, error) {
+	if p.hasTerminal() {
+		value, err := p.inputTerminal(ctx, inputPromptConfig{
+			Title:       title,
+			Description: description,
+			Placeholder: defaultValue,
+			Value:       defaultValue,
+		})
+		if err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(value) == "" {
+			return defaultValue, nil
+		}
+		return strings.TrimSpace(value), nil
 	}
-	return value
+
+	if description != "" {
+		fmt.Fprintln(p.out, p.hintStyle.Render(description))
+	}
+	label := title
+	if defaultValue != "" {
+		label += " [" + defaultValue + "]"
+	}
+	fmt.Fprint(p.out, p.promptStyle.Render(label+": "))
+	value, err := p.readLine(ctx)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(value) == "" {
+		return defaultValue, nil
+	}
+	return strings.TrimSpace(value), nil
 }
 
 func (p *Prompt) AskOutputSize(ctx context.Context, defaultSize string) (string, error) {
@@ -1491,40 +1540,8 @@ func pickerDiscoveredFormat(path string, name string, isDir bool) (domain.Format
 }
 
 func pickerTextFile(path string) bool {
-	info, err := os.Stat(path)
-	if err != nil || info.IsDir() {
-		return false
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return false
-	}
-	defer file.Close()
-	buffer := make([]byte, 8192)
-	n, err := file.Read(buffer)
-	if err != nil && err != io.EOF {
-		return false
-	}
-	return pickerLooksLikeText(buffer[:n])
-}
-
-func pickerLooksLikeText(data []byte) bool {
-	if len(data) == 0 {
-		return true
-	}
-	control := 0
-	for _, b := range data {
-		if b == 0 {
-			return false
-		}
-		if b < 0x20 && b != '\n' && b != '\r' && b != '\t' && b != '\f' && b != '\b' {
-			control++
-		}
-		if b == 0x7f {
-			control++
-		}
-	}
-	return control*100 <= len(data)*30
+	text, err := scan.IsTextFile(path)
+	return err == nil && text
 }
 
 func fileFormatColumn(format domain.Format) string {
@@ -1575,8 +1592,12 @@ func formatCategory(format domain.Format) string {
 		return "doc"
 	case domain.FormatXLSX, domain.FormatODS:
 		return "spreadsheet"
-	case domain.FormatJSON, domain.FormatYAML, domain.FormatTOML, domain.FormatCSV, domain.FormatINI, domain.FormatXML, domain.FormatPLIST, domain.FormatSQL, domain.FormatSQLite, domain.FormatParquet, domain.FormatAvro, domain.FormatORC, domain.FormatArrow, domain.FormatFeather, domain.FormatBSON, domain.FormatMsgpack, domain.FormatCBOR:
+	case domain.FormatJSON, domain.FormatJSONL, domain.FormatYAML, domain.FormatTOML, domain.FormatCSV, domain.FormatTSV, domain.FormatINI, domain.FormatENV, domain.FormatXML, domain.FormatPLIST, domain.FormatSQL, domain.FormatSQLite, domain.FormatParquet, domain.FormatAvro, domain.FormatORC, domain.FormatArrow, domain.FormatFeather, domain.FormatBSON, domain.FormatMsgpack, domain.FormatCBOR:
 		return "data"
+	case domain.FormatDOT, domain.FormatMermaid:
+		return "diagram"
+	case domain.FormatIPYNB, domain.FormatPY:
+		return "code"
 	case domain.FormatGeoJSON, domain.FormatTopoJSON, domain.FormatKML, domain.FormatKMZ, domain.FormatGPX, domain.FormatSHP, domain.FormatGPKG, domain.FormatGML, domain.FormatOSM, domain.FormatPBF, domain.FormatMBTiles, domain.FormatPMTiles, domain.FormatMVT, domain.FormatWKT, domain.FormatWKB, domain.FormatLAS, domain.FormatLAZ, domain.FormatHGT:
 		return "geo"
 	case domain.FormatOpenAPI, domain.FormatSwagger, domain.FormatJSONSchema, domain.FormatAsyncAPI, domain.FormatGraphQL, domain.FormatProto, domain.FormatProtoSet, domain.FormatThrift, domain.FormatAvroSchema, domain.FormatFlatBuffers, domain.FormatCapnp, domain.FormatWSDL, domain.FormatXSD:
@@ -1588,7 +1609,7 @@ func formatCategory(format domain.Format) string {
 }
 
 func categoryStyleMaps(palette theme.Palette) (map[string]lipgloss.Style, map[string]lipgloss.Style, map[string]lipgloss.Style, map[string]lipgloss.Style) {
-	categories := []string{"directory", "image", "animation", "video", "audio", "archive", "font", "disk", "vm", "doc", "ebook", "spreadsheet", "data", "geo", "schema", "custom"}
+	categories := []string{"directory", "image", "animation", "video", "audio", "archive", "font", "disk", "vm", "doc", "ebook", "spreadsheet", "data", "geo", "schema", "diagram", "code", "custom"}
 	base := make(map[string]lipgloss.Style, len(categories))
 	faint := make(map[string]lipgloss.Style, len(categories))
 	selected := make(map[string]lipgloss.Style, len(categories))
@@ -1760,17 +1781,6 @@ func archiveActionFromIndex(index int) domain.ArchiveAction {
 		return domain.ArchiveActionConvert
 	default:
 		return domain.ArchiveActionCancel
-	}
-}
-
-func sameFormatActionFromIndex(index int) domain.TransformAction {
-	switch index {
-	case 0:
-		return domain.ActionCompress
-	case 1:
-		return domain.ActionResize
-	default:
-		return domain.ActionConvert
 	}
 }
 

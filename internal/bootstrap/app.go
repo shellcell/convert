@@ -53,6 +53,12 @@ func (a *App) Run(ctx context.Context, args []string, stdin io.Reader, stdout io
 		converters.NewSevenZip(runner),
 		converters.NewFontForge(runner),
 		converters.NewPandoc(runner),
+		converters.NewInkscape(runner),
+		converters.NewGhostscript(runner),
+		converters.NewDjVuLibre(runner),
+		converters.NewGraphviz(runner),
+		converters.NewMermaid(runner),
+		converters.NewJupyter(runner),
 		converters.NewImageMagick(runner),
 	}
 	converterList = append(converterList, configured.Converters...)

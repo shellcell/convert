@@ -23,6 +23,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/shellcell/convert/internal/domain"
 	"github.com/shellcell/convert/internal/ports"
+	"github.com/shellcell/convert/internal/scan"
 )
 
 type AnimatedSVG struct {
@@ -83,6 +84,25 @@ func (c *AnimatedSVG) DependencyChecks() []ports.DependencyCheck {
 		Found:    found,
 		Commands: []string{"chromium"},
 	}}
+}
+
+func (c *AnimatedSVG) OptionSpecs(input domain.Format, output domain.Format) []ports.OptionSpec {
+	return []ports.OptionSpec{
+		{
+			Tool:        "animated_svg",
+			Key:         "fps",
+			Title:       "Animation frame rate",
+			Description: "Frames per second captured from the animated SVG.",
+			Default:     "30",
+		},
+		{
+			Tool:        "animated_svg",
+			Key:         "duration",
+			Title:       "Animation duration (seconds)",
+			Description: "Capture length in seconds. Empty detects the duration from the SVG.",
+			Default:     "",
+		},
+	}
 }
 
 func (c *AnimatedSVG) Convert(ctx context.Context, job domain.ConvertJob) (domain.ConversionResult, error) {
@@ -509,30 +529,6 @@ func evenDimensions(width int, height int) (int, int) {
 	return width, height
 }
 
-func intOption(options domain.ToolOptions, tool string, key string, fallback int) int {
-	values := options.Values(tool, key)
-	if len(values) == 0 {
-		return fallback
-	}
-	value, err := strconv.Atoi(strings.TrimSpace(values[0]))
-	if err != nil {
-		return fallback
-	}
-	return value
-}
-
-func floatOption(options domain.ToolOptions, tool string, key string, fallback float64) float64 {
-	values := options.Values(tool, key)
-	if len(values) == 0 {
-		return fallback
-	}
-	value, err := strconv.ParseFloat(strings.TrimSpace(values[0]), 64)
-	if err != nil {
-		return fallback
-	}
-	return value
-}
-
 func parseFullSize(value string) (int, int, bool) {
 	widthValue, heightValue := resizeDimensions(value)
 	width, err := strconv.Atoi(widthValue)
@@ -723,81 +719,6 @@ func maxFloat(left float64, right float64) float64 {
 }
 
 func svgIntrinsicSize(path string) (string, bool) {
-	file, err := os.Open(path)
-	if err != nil {
-		return "", false
-	}
-	defer file.Close()
-
-	decoder := xml.NewDecoder(file)
-	for {
-		token, err := decoder.Token()
-		if err == io.EOF {
-			return "", false
-		}
-		if err != nil {
-			return "", false
-		}
-		start, ok := token.(xml.StartElement)
-		if !ok || strings.ToLower(start.Name.Local) != "svg" {
-			continue
-		}
-		attrs := map[string]string{}
-		for _, attr := range start.Attr {
-			attrs[strings.ToLower(attr.Name.Local)] = attr.Value
-		}
-		if width, ok := svgLength(attrs["width"]); ok {
-			if height, ok := svgLength(attrs["height"]); ok {
-				return svgSizeString(width, height), true
-			}
-		}
-		if width, height, ok := svgViewBoxSize(attrs["viewbox"]); ok {
-			return svgSizeString(width, height), true
-		}
-		return "", false
-	}
-}
-
-func svgLength(value string) (float64, bool) {
-	value = strings.TrimSpace(value)
-	if value == "" || strings.HasSuffix(value, "%") {
-		return 0, false
-	}
-	end := 0
-	for end < len(value) {
-		ch := value[end]
-		if (ch >= '0' && ch <= '9') || ch == '.' || ch == '+' || ch == '-' {
-			end++
-			continue
-		}
-		break
-	}
-	if end == 0 {
-		return 0, false
-	}
-	number, err := strconv.ParseFloat(value[:end], 64)
-	if err != nil || number <= 0 {
-		return 0, false
-	}
-	return number, true
-}
-
-func svgViewBoxSize(value string) (float64, float64, bool) {
-	fields := strings.Fields(strings.ReplaceAll(strings.TrimSpace(value), ",", " "))
-	if len(fields) != 4 {
-		return 0, 0, false
-	}
-	width, err := strconv.ParseFloat(fields[2], 64)
-	if err != nil || width <= 0 {
-		return 0, 0, false
-	}
-	height, err := strconv.ParseFloat(fields[3], 64)
-	if err != nil || height <= 0 {
-		return 0, 0, false
-	}
-	return width, height, true
-}
-
-func svgSizeString(width float64, height float64) string {
-	return strconv.Itoa(max(1, int(math.Round(width)))) + "x" + strconv.Itoa(max(1, int(math.Round(height))))
+	size, ok, err := scan.SVGSize(path)
+	return size, err == nil && ok
 }

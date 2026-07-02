@@ -1,6 +1,9 @@
 package theme
 
-import "strings"
+import (
+	"maps"
+	"strings"
+)
 
 type Palette struct {
 	Title           string            `json:"title"`
@@ -56,6 +59,8 @@ func Classic() Palette {
 			"data":        "39",
 			"geo":         "70",
 			"schema":      "99",
+			"diagram":     "135",
+			"code":        "48",
 			"custom":      "245",
 		},
 	}
@@ -93,6 +98,8 @@ func Nord() Palette {
 			"data":        "#88C0D0",
 			"geo":         "#A3BE8C",
 			"schema":      "#B48EAD",
+			"diagram":     "#D08770",
+			"code":        "#8FBCBB",
 			"custom":      "#D8DEE9",
 		},
 	}
@@ -111,10 +118,8 @@ func Named(name string) Palette {
 
 func (p Palette) Merge(overrides Palette) Palette {
 	result := p
-	result.Categories = map[string]string{}
-	for key, value := range p.Categories {
-		result.Categories[key] = value
-	}
+	result.Categories = make(map[string]string, len(p.Categories))
+	maps.Copy(result.Categories, p.Categories)
 	mergeString := func(target *string, value string) {
 		if strings.TrimSpace(value) != "" {
 			*target = strings.TrimSpace(value)

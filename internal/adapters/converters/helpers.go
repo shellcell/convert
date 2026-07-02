@@ -2,17 +2,16 @@ package converters
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/shellcell/convert/internal/domain"
 	"github.com/shellcell/convert/internal/ports"
+	"github.com/shellcell/convert/internal/shell"
 )
 
 func hasCapability(capabilities []domain.ConversionCapability, input domain.Format, output domain.Format) bool {
@@ -62,50 +61,57 @@ func resizeDimensions(value string) (string, string) {
 	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
 }
 
+// stringOption returns the first configured value for (tool, key), or the
+// fallback when unset.
+func stringOption(options domain.ToolOptions, tool string, key string, fallback string) string {
+	values := options.Values(tool, key)
+	if len(values) == 0 || strings.TrimSpace(values[0]) == "" {
+		return fallback
+	}
+	return strings.TrimSpace(values[0])
+}
+
+func intOption(options domain.ToolOptions, tool string, key string, fallback int) int {
+	value, err := strconv.Atoi(stringOption(options, tool, key, ""))
+	if err != nil {
+		return fallback
+	}
+	return value
+}
+
+func floatOption(options domain.ToolOptions, tool string, key string, fallback float64) float64 {
+	value, err := strconv.ParseFloat(stringOption(options, tool, key, ""), 64)
+	if err != nil {
+		return fallback
+	}
+	return value
+}
+
+// extraArgs returns user-supplied pass-through arguments for a backend: every
+// value under `<tool>.args` is split on whitespace and appended to the
+// command line, so any tool flag stays reachable without code changes.
+func extraArgs(options domain.ToolOptions, tool string) []string {
+	var args []string
+	for _, value := range options.Values(tool, "args") {
+		args = append(args, strings.Fields(value)...)
+	}
+	return args
+}
+
 func commandError(command ports.Command, result ports.CommandResult, err error) error {
-	if err == nil {
-		return nil
-	}
-	message := fmt.Sprintf("command: %s", commandLine(command))
-	if result.Stderr != "" {
-		return fmt.Errorf("%s: %w: %s", message, err, result.Stderr)
-	}
-	if result.Stdout != "" {
-		return fmt.Errorf("%s: %w: %s", message, err, result.Stdout)
-	}
-	return fmt.Errorf("%s: %w", message, err)
+	return shell.CommandError(command, result, err)
 }
 
 func commandStringError(command string, result ports.CommandResult, err error) error {
-	if err == nil {
-		return nil
-	}
-	message := fmt.Sprintf("command: %s", command)
-	if result.Stderr != "" {
-		return fmt.Errorf("%s: %w: %s", message, err, result.Stderr)
-	}
-	if result.Stdout != "" {
-		return fmt.Errorf("%s: %w: %s", message, err, result.Stdout)
-	}
-	return fmt.Errorf("%s: %w", message, err)
+	return shell.CommandStringError(command, result, err)
 }
 
 func shellCommand(command string) ports.Command {
-	if runtime.GOOS == "windows" {
-		return ports.Command{Name: "cmd", Args: []string{"/C", command}}
-	}
-	return ports.Command{Name: "sh", Args: []string{"-c", command}}
+	return shell.Command(command)
 }
 
 func commandLine(command ports.Command) string {
-	parts := []string{command.Name}
-	parts = append(parts, command.Args...)
-	for i, part := range parts {
-		if part == "" || strings.ContainsAny(part, " \t\n\"'\\$`") {
-			parts[i] = strconv.Quote(part)
-		}
-	}
-	return strings.Join(parts, " ")
+	return shell.Line(command)
 }
 
 func runSimple(ctx context.Context, runner ports.CommandRunner, command string, args []string, job domain.ConvertJob, backend string) (domain.ConversionResult, error) {

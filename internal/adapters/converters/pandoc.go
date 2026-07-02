@@ -2,6 +2,7 @@ package converters
 
 import (
 	"context"
+	"strings"
 
 	"github.com/shellcell/convert/internal/domain"
 	"github.com/shellcell/convert/internal/ports"
@@ -23,6 +24,8 @@ func NewPandoc(runner ports.CommandRunner) *Pandoc {
 		domain.FormatODT,
 		domain.FormatEPUB,
 		domain.FormatFB2,
+		domain.FormatRST,
+		domain.FormatORG,
 	}
 	outputs := []domain.Format{
 		domain.FormatPDF,
@@ -34,6 +37,9 @@ func NewPandoc(runner ports.CommandRunner) *Pandoc {
 		domain.FormatTEX,
 		domain.FormatODT,
 		domain.FormatEPUB,
+		domain.FormatRST,
+		domain.FormatORG,
+		domain.FormatPPTX,
 	}
 	return &Pandoc{runner: runner, caps: capabilities(inputs, outputs, 70, false, false)}
 }
@@ -90,6 +96,12 @@ func (c *Pandoc) args(job domain.ConvertJob) ([]string, error) {
 		}
 		args = append(args, "--pdf-engine", engine)
 	}
+	if job.OutputFormat == domain.FormatHTML {
+		// Without --standalone pandoc emits a body fragment, which most
+		// callers converting a file to .html do not expect.
+		args = append(args, "--standalone")
+	}
+	args = append(args, extraArgs(job.Options.ToolOptions, "pandoc")...)
 	args = append(args, "-o", job.OutputPath)
 	return args, nil
 }
@@ -115,12 +127,5 @@ func (c *Pandoc) availablePDFEngine(engines []string) (string, bool) {
 }
 
 func joinList(values []string) string {
-	if len(values) == 0 {
-		return ""
-	}
-	result := values[0]
-	for _, value := range values[1:] {
-		result += ", " + value
-	}
-	return result
+	return strings.Join(values, ", ")
 }

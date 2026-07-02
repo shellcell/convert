@@ -54,6 +54,7 @@ func (c *Resvg) args(job domain.ConvertJob) []string {
 			args = append(args, "--height", height)
 		}
 	}
+	args = append(args, extraArgs(job.Options.ToolOptions, "resvg")...)
 	args = append(args, job.InputPath, job.OutputPath)
 	return args
 }

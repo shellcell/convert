@@ -71,7 +71,15 @@ func (c *ImageMagick) args(job domain.ConvertJob) []string {
 	if job.Options.Resize != "" {
 		args = append(args, "-resize", job.Options.Resize)
 	}
+	if job.Options.Action == domain.ActionCompress {
+		// Compression without stripping metadata rarely shrinks anything.
+		args = append(args, "-strip")
+		if job.Options.Quality <= 0 {
+			args = append(args, "-quality", "85")
+		}
+	}
 	args = append(args, qualityArgs(job)...)
+	args = append(args, extraArgs(job.Options.ToolOptions, "imagemagick")...)
 	args = append(args, job.OutputPath)
 	return args
 }

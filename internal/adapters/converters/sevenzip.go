@@ -78,10 +78,31 @@ func (c *SevenZip) PreviewCommands(job domain.ConvertJob) ports.CommandPreview {
 	return previewCommand("7z", c.args(job))
 }
 
+func (c *SevenZip) OptionSpecs(input domain.Format, output domain.Format) []ports.OptionSpec {
+	if output == domain.FormatDir {
+		return nil
+	}
+	return []ports.OptionSpec{{
+		Tool:        "7z",
+		Key:         "level",
+		Title:       "Compression level",
+		Description: "0 stores, 1 is fastest, 9 is smallest. Empty keeps the 7z default (5).",
+		Default:     "",
+	}}
+}
+
 func (c *SevenZip) args(job domain.ConvertJob) []string {
+	options := job.Options.ToolOptions
 	if job.OutputFormat == domain.FormatDir {
-		return []string{"x", "-y", "-o" + job.OutputPath, job.InputPath}
+		args := []string{"x", "-y", "-o" + job.OutputPath}
+		args = append(args, extraArgs(options, "7z")...)
+		return append(args, job.InputPath)
 	}
 
-	return []string{"a", "-y", job.OutputPath, job.InputPath}
+	args := []string{"a", "-y"}
+	if level := stringOption(options, "7z", "level", ""); level != "" {
+		args = append(args, "-mx="+level)
+	}
+	args = append(args, extraArgs(options, "7z")...)
+	return append(args, job.OutputPath, job.InputPath)
 }

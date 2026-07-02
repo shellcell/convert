@@ -13,10 +13,11 @@ It uses clean layered architecture and delegates actual conversion work to exter
 ## Build
 
 ```bash
-go build ./cmd/convert
+make build        # release build: -trimpath -ldflags="-s -w" (~9.8 MB)
+make build-debug  # unstripped build for debugging (~14 MB)
 ```
 
-This creates `./convert` in the current directory.
+Both create `./convert` in the current directory.
 
 ## Usage
 
@@ -33,6 +34,11 @@ This creates `./convert` in the current directory.
 ./convert --resize 800x -o png image.png
 ./convert -o json config.yaml
 ./convert -o yaml data.csv
+./convert -o mp3 video.mp4
+./convert --opt ffmpeg.audio_bitrate=320k -o mp3 song.wav
+./convert --opt structured.text_style=raw -o txt config.yaml
+./convert -o md data.csv
+./convert -o svg diagram.dot
 ./convert doctor
 ./convert formats
 ./convert backends

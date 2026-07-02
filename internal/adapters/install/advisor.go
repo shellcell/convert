@@ -123,6 +123,27 @@ func packageName(command string, manager string) string {
 		"fontforge": {
 			"brew": "fontforge", "apt": "fontforge", "dnf": "fontforge", "yum": "fontforge", "pacman": "fontforge", "zypper": "fontforge", "apk": "fontforge",
 		},
+		"gs": {
+			"brew": "ghostscript", "apt": "ghostscript", "dnf": "ghostscript", "yum": "ghostscript", "pacman": "ghostscript", "zypper": "ghostscript", "apk": "ghostscript",
+		},
+		"inkscape": {
+			"brew": "inkscape", "apt": "inkscape", "dnf": "inkscape", "yum": "inkscape", "pacman": "inkscape", "zypper": "inkscape", "apk": "inkscape",
+		},
+		"ddjvu": {
+			"brew": "djvulibre", "apt": "djvulibre-bin", "dnf": "djvulibre", "yum": "djvulibre", "pacman": "djvulibre", "zypper": "djvulibre", "apk": "djvulibre",
+		},
+		"dot": {
+			"brew": "graphviz", "apt": "graphviz", "dnf": "graphviz", "yum": "graphviz", "pacman": "graphviz", "zypper": "graphviz", "apk": "graphviz",
+		},
+		"mmdc": {
+			"brew": "mermaid-cli", "apt": "mermaid-cli", "dnf": "mermaid-cli", "yum": "mermaid-cli", "pacman": "mermaid-cli", "zypper": "mermaid-cli", "apk": "mermaid-cli", "npm": "@mermaid-js/mermaid-cli",
+		},
+		"jupyter": {
+			"brew": "jupyterlab", "apt": "jupyter", "dnf": "jupyter", "yum": "jupyter", "pacman": "jupyter", "zypper": "jupyter", "apk": "jupyter", "pipx": "jupyter-core",
+		},
+		"djvutxt": {
+			"brew": "djvulibre", "apt": "djvulibre-bin", "dnf": "djvulibre", "yum": "djvulibre", "pacman": "djvulibre", "zypper": "djvulibre", "apk": "djvulibre",
+		},
 		"protoc": {
 			"brew": "protobuf", "apt": "protobuf-compiler", "dnf": "protobuf-compiler", "yum": "protobuf-compiler", "pacman": "protobuf", "zypper": "protobuf-devel", "apk": "protobuf-dev",
 		},
@@ -152,6 +173,14 @@ func genericPackageName(command string) string {
 		return "calibre"
 	case "ogr2ogr":
 		return "gdal"
+	case "gs":
+		return "ghostscript"
+	case "ddjvu", "djvutxt":
+		return "djvulibre"
+	case "dot":
+		return "graphviz"
+	case "mmdc":
+		return "mermaid-cli"
 	default:
 		return command
 	}

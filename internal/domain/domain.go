@@ -13,7 +13,6 @@ type Format string
 const (
 	FormatPNG         Format = "png"
 	FormatJPEG        Format = "jpeg"
-	FormatJPG         Format = "jpg"
 	FormatWebP        Format = "webp"
 	FormatBMP         Format = "bmp"
 	FormatTIFF        Format = "tiff"
@@ -27,8 +26,12 @@ const (
 	FormatJP2         Format = "jp2"
 	FormatSVG         Format = "svg"
 	FormatPDF         Format = "pdf"
+	FormatPS          Format = "ps"
+	FormatEPS         Format = "eps"
 	FormatTXT         Format = "txt"
 	FormatMD          Format = "md"
+	FormatRST         Format = "rst"
+	FormatORG         Format = "org"
 	FormatHTML        Format = "html"
 	FormatRTF         Format = "rtf"
 	FormatTEX         Format = "tex"
@@ -104,11 +107,18 @@ const (
 	FormatPFA         Format = "pfa"
 	FormatPFB         Format = "pfb"
 	FormatJSON        Format = "json"
+	FormatJSONL       Format = "jsonl"
 	FormatYAML        Format = "yaml"
 	FormatXML         Format = "xml"
 	FormatTOML        Format = "toml"
 	FormatINI         Format = "ini"
+	FormatENV         Format = "env"
 	FormatPLIST       Format = "plist"
+	FormatTSV         Format = "tsv"
+	FormatDOT         Format = "dot"
+	FormatMermaid     Format = "mmd"
+	FormatIPYNB       Format = "ipynb"
+	FormatPY          Format = "py"
 	FormatSQL         Format = "sql"
 	FormatSQLite      Format = "sqlite"
 	FormatParquet     Format = "parquet"
@@ -217,10 +227,15 @@ var aliases = map[string]Format{
 	"jpeg2000":    FormatJP2,
 	"svg":         FormatSVG,
 	"pdf":         FormatPDF,
+	"ps":          FormatPS,
+	"postscript":  FormatPS,
+	"eps":         FormatEPS,
 	"txt":         FormatTXT,
 	"text":        FormatTXT,
 	"md":          FormatMD,
 	"markdown":    FormatMD,
+	"rst":         FormatRST,
+	"org":         FormatORG,
 	"html":        FormatHTML,
 	"htm":         FormatHTML,
 	"rtf":         FormatRTF,
@@ -306,15 +321,24 @@ var aliases = map[string]Format{
 	"pfa":         FormatPFA,
 	"pfb":         FormatPFB,
 	"json":        FormatJSON,
-	"jsonl":       Format("jsonl"),
-	"ndjson":      Format("ndjson"),
+	"jsonl":       FormatJSONL,
+	"ndjson":      FormatJSONL,
 	"yaml":        FormatYAML,
 	"yml":         FormatYAML,
 	"xml":         FormatXML,
 	"toml":        FormatTOML,
 	"ini":         FormatINI,
 	"cfg":         FormatINI,
+	"env":         FormatENV,
+	"dotenv":      FormatENV,
 	"plist":       FormatPLIST,
+	"tsv":         FormatTSV,
+	"dot":         FormatDOT,
+	"gv":          FormatDOT,
+	"mmd":         FormatMermaid,
+	"mermaid":     FormatMermaid,
+	"ipynb":       FormatIPYNB,
+	"py":          FormatPY,
 	"sql":         FormatSQL,
 	"sqlite":      FormatSQLite,
 	"sqlite3":     FormatSQLite,
@@ -385,6 +409,20 @@ var aliases = map[string]Format{
 	"folder":      FormatDir,
 }
 
+// registeredFormats indexes the canonical formats from the aliases map so
+// membership checks stay O(1); it is rebuilt lazily after registrations.
+var registeredFormats map[Format]bool
+
+func registeredFormatSet() map[Format]bool {
+	if registeredFormats == nil {
+		registeredFormats = make(map[Format]bool, len(aliases))
+		for _, format := range aliases {
+			registeredFormats[format] = true
+		}
+	}
+	return registeredFormats
+}
+
 var compoundExtensions = []string{
 	"pkg.tar.zst",
 	"schema.json",
@@ -440,6 +478,7 @@ func RegisterFormat(name string, values ...string) (Format, error) {
 	}
 
 	aliases[format.String()] = format
+	registeredFormats = nil
 	if strings.Contains(format.String(), ".") {
 		registerCompoundExtension(format.String())
 	}
@@ -492,13 +531,9 @@ func validCustomFormat(value string) bool {
 }
 
 func AllFormats() []Format {
-	seen := map[Format]bool{}
-	formats := make([]Format, 0, len(aliases))
-	for _, format := range aliases {
-		if seen[format] {
-			continue
-		}
-		seen[format] = true
+	set := registeredFormatSet()
+	formats := make([]Format, 0, len(set))
+	for format := range set {
 		formats = append(formats, format)
 	}
 	sort.Slice(formats, func(i, j int) bool { return formats[i] < formats[j] })
@@ -506,12 +541,7 @@ func AllFormats() []Format {
 }
 
 func IsRegisteredFormat(format Format) bool {
-	for _, registered := range aliases {
-		if registered == format {
-			return true
-		}
-	}
-	return false
+	return registeredFormatSet()[format]
 }
 
 func (f Format) String() string {

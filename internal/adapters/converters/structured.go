@@ -16,6 +16,7 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 	"github.com/shellcell/convert/internal/domain"
+	"github.com/shellcell/convert/internal/ports"
 	ini "gopkg.in/ini.v1"
 	"gopkg.in/yaml.v3"
 	"howett.net/plist"
@@ -28,14 +29,22 @@ type StructuredData struct {
 func NewStructuredData() *StructuredData {
 	formats := []domain.Format{
 		domain.FormatJSON,
+		domain.FormatJSONL,
 		domain.FormatYAML,
 		domain.FormatTOML,
 		domain.FormatCSV,
+		domain.FormatTSV,
 		domain.FormatINI,
+		domain.FormatENV,
 		domain.FormatXML,
 		domain.FormatPLIST,
 	}
-	return &StructuredData{caps: capabilities(formats, formats, 95, false, false)}
+	caps := capabilities(formats, formats, 95, false, false)
+	// Structured data can also leave the structured world: txt renders the
+	// parsed data as plain text (or copies the raw content), md renders a
+	// Markdown table for tabular data and a fenced block otherwise.
+	caps = append(caps, capabilities(formats, []domain.Format{domain.FormatTXT, domain.FormatMD}, 95, false, false)...)
+	return &StructuredData{caps: caps}
 }
 
 func (c *StructuredData) ID() string { return "structured" }
@@ -50,6 +59,19 @@ func (c *StructuredData) CanConvert(input domain.Format, output domain.Format) b
 	return hasCapability(c.caps, input, output)
 }
 
+func (c *StructuredData) OptionSpecs(input domain.Format, output domain.Format) []ports.OptionSpec {
+	if output != domain.FormatTXT {
+		return nil
+	}
+	return []ports.OptionSpec{{
+		Tool:        "structured",
+		Key:         "text_style",
+		Title:       "Plain text style",
+		Description: "pretty renders the parsed data as readable text; raw copies the original file content unchanged.",
+		Default:     "pretty",
+	}}
+}
+
 func (c *StructuredData) Convert(ctx context.Context, job domain.ConvertJob) (domain.ConversionResult, error) {
 	select {
 	case <-ctx.Done():
@@ -62,13 +84,18 @@ func (c *StructuredData) Convert(ctx context.Context, job domain.ConvertJob) (do
 		return domain.ConversionResult{}, err
 	}
 
-	value, err := decodeStructured(job.InputFormat, data)
-	if err != nil {
-		return domain.ConversionResult{}, err
-	}
-	encoded, err := encodeStructured(job.OutputFormat, normalizeStructured(value))
-	if err != nil {
-		return domain.ConversionResult{}, err
+	var encoded []byte
+	if job.OutputFormat == domain.FormatTXT && textStyle(job) == "raw" {
+		encoded = data
+	} else {
+		value, err := decodeStructured(job.InputFormat, data)
+		if err != nil {
+			return domain.ConversionResult{}, err
+		}
+		encoded, err = encodeStructuredOutput(job.OutputFormat, normalizeStructured(value))
+		if err != nil {
+			return domain.ConversionResult{}, err
+		}
 	}
 
 	if err := os.MkdirAll(filepath.Dir(job.OutputPath), 0o755); err != nil {
@@ -79,6 +106,154 @@ func (c *StructuredData) Convert(ctx context.Context, job domain.ConvertJob) (do
 	}
 
 	return domain.ConversionResult{Job: job, Backend: c.ID(), OutputPath: job.OutputPath}, nil
+}
+
+func textStyle(job domain.ConvertJob) string {
+	return strings.ToLower(stringOption(job.Options.ToolOptions, "structured", "text_style", "pretty"))
+}
+
+func encodeStructuredOutput(format domain.Format, value interface{}) ([]byte, error) {
+	switch format {
+	case domain.FormatTXT:
+		var b strings.Builder
+		renderPlainText(&b, value, 0)
+		return []byte(b.String()), nil
+	case domain.FormatMD:
+		return encodeMarkdown(value)
+	default:
+		return encodeStructured(format, value)
+	}
+}
+
+// renderPlainText writes the parsed structure as indented "key: value" lines,
+// so structured files stay readable once converted to plain text.
+func renderPlainText(b *strings.Builder, value interface{}, indent int) {
+	switch value := value.(type) {
+	case map[string]interface{}:
+		if len(value) == 0 {
+			writeIndent(b, indent)
+			b.WriteString("(empty)\n")
+			return
+		}
+		for _, key := range sortedMapKeys(value) {
+			writeIndent(b, indent)
+			b.WriteString(key)
+			b.WriteString(":")
+			if isScalarValue(value[key]) {
+				b.WriteString(" ")
+				b.WriteString(flatStructuredValue(value[key]))
+				b.WriteString("\n")
+				continue
+			}
+			b.WriteString("\n")
+			renderPlainText(b, value[key], indent+1)
+		}
+	case []interface{}:
+		if len(value) == 0 {
+			writeIndent(b, indent)
+			b.WriteString("(empty list)\n")
+			return
+		}
+		for _, item := range value {
+			if isScalarValue(item) {
+				writeIndent(b, indent)
+				b.WriteString("- ")
+				b.WriteString(flatStructuredValue(item))
+				b.WriteString("\n")
+				continue
+			}
+			writeIndent(b, indent)
+			b.WriteString("-\n")
+			renderPlainText(b, item, indent+1)
+		}
+	default:
+		writeIndent(b, indent)
+		b.WriteString(flatStructuredValue(value))
+		b.WriteString("\n")
+	}
+}
+
+func writeIndent(b *strings.Builder, indent int) {
+	for range indent {
+		b.WriteString("  ")
+	}
+}
+
+func isScalarValue(value interface{}) bool {
+	switch value.(type) {
+	case nil, string, bool, int, int64, uint64, float64, json.Number:
+		return true
+	default:
+		return false
+	}
+}
+
+// encodeMarkdown renders tabular data (a list of flat objects, e.g. a parsed
+// CSV) as a Markdown table and everything else as a fenced JSON block.
+func encodeMarkdown(value interface{}) ([]byte, error) {
+	if rows, ok := markdownTableRows(value); ok {
+		headers := csvHeaders(rows)
+		var b strings.Builder
+		writeMarkdownRow(&b, headers, func(header string) string { return header })
+		writeMarkdownRow(&b, headers, func(string) string { return "---" })
+		for _, row := range rows {
+			writeMarkdownRow(&b, headers, func(header string) string {
+				return markdownCell(flatStructuredValue(row[header]))
+			})
+		}
+		return []byte(b.String()), nil
+	}
+
+	pretty, err := encodeStructured(domain.FormatJSON, value)
+	if err != nil {
+		return nil, err
+	}
+	var b strings.Builder
+	b.WriteString("```json\n")
+	b.Write(pretty)
+	if len(pretty) > 0 && pretty[len(pretty)-1] != '\n' {
+		b.WriteString("\n")
+	}
+	b.WriteString("```\n")
+	return []byte(b.String()), nil
+}
+
+func markdownTableRows(value interface{}) ([]map[string]interface{}, bool) {
+	list, ok := value.([]interface{})
+	if !ok || len(list) == 0 {
+		return nil, false
+	}
+	rows := make([]map[string]interface{}, 0, len(list))
+	for _, item := range list {
+		row, ok := item.(map[string]interface{})
+		if !ok {
+			return nil, false
+		}
+		for _, cell := range row {
+			if !isScalarValue(cell) {
+				return nil, false
+			}
+		}
+		rows = append(rows, row)
+	}
+	return rows, true
+}
+
+func writeMarkdownRow(b *strings.Builder, headers []string, cell func(string) string) {
+	b.WriteString("|")
+	for _, header := range headers {
+		b.WriteString(" ")
+		b.WriteString(cell(header))
+		b.WriteString(" |")
+	}
+	b.WriteString("\n")
+}
+
+func markdownCell(value string) string {
+	value = strings.ReplaceAll(value, "|", `\|`)
+	value = strings.ReplaceAll(value, "\r\n", "<br>")
+	value = strings.ReplaceAll(value, "\n", "<br>")
+	return value
 }
 
 func decodeStructured(format domain.Format, data []byte) (interface{}, error) {
@@ -103,10 +278,16 @@ func decodeStructured(format domain.Format, data []byte) (interface{}, error) {
 			return nil, err
 		}
 		return value, nil
+	case domain.FormatJSONL:
+		return decodeJSONLines(data)
 	case domain.FormatCSV:
-		return decodeCSV(data)
+		return decodeCSV(data, ',')
+	case domain.FormatTSV:
+		return decodeCSV(data, '\t')
 	case domain.FormatINI:
 		return decodeINI(data)
+	case domain.FormatENV:
+		return decodeEnv(data)
 	case domain.FormatXML:
 		return decodeXML(data)
 	case domain.FormatPLIST:
@@ -134,10 +315,16 @@ func encodeStructured(format domain.Format, value interface{}) ([]byte, error) {
 		return yaml.Marshal(value)
 	case domain.FormatTOML:
 		return toml.Marshal(tomlDocument(value))
+	case domain.FormatJSONL:
+		return encodeJSONLines(value)
 	case domain.FormatCSV:
-		return encodeCSV(value)
+		return encodeCSV(value, ',')
+	case domain.FormatTSV:
+		return encodeCSV(value, '\t')
 	case domain.FormatINI:
 		return encodeINI(value)
+	case domain.FormatENV:
+		return encodeEnv(value)
 	case domain.FormatXML:
 		return encodeXML(value)
 	case domain.FormatPLIST:
@@ -147,8 +334,90 @@ func encodeStructured(format domain.Format, value interface{}) ([]byte, error) {
 	}
 }
 
-func decodeCSV(data []byte) (interface{}, error) {
+// decodeJSONLines reads JSON Lines / NDJSON into a list; the streaming
+// decoder also tolerates records that span multiple lines.
+func decodeJSONLines(data []byte) (interface{}, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	rows := []interface{}{}
+	for {
+		var value interface{}
+		if err := decoder.Decode(&value); err == io.EOF {
+			return rows, nil
+		} else if err != nil {
+			return nil, err
+		}
+		rows = append(rows, value)
+	}
+}
+
+func encodeJSONLines(value interface{}) ([]byte, error) {
+	rows, ok := value.([]interface{})
+	if !ok {
+		rows = []interface{}{value}
+	}
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	for _, row := range rows {
+		if err := encoder.Encode(row); err != nil {
+			return nil, err
+		}
+	}
+	return buf.Bytes(), nil
+}
+
+// decodeEnv parses dotenv-style KEY=VALUE lines into a flat object.
+func decodeEnv(data []byte) (interface{}, error) {
+	result := map[string]interface{}{}
+	for line := range strings.SplitSeq(string(data), "\n") {
+		line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimPrefix(line, "export ")
+		key, value, ok := strings.Cut(line, "=")
+		key = strings.TrimSpace(key)
+		if !ok || key == "" {
+			return nil, fmt.Errorf("invalid env line: %s", line)
+		}
+		value = strings.TrimSpace(value)
+		if len(value) >= 2 {
+			if (value[0] == '"' && value[len(value)-1] == '"') || (value[0] == '\'' && value[len(value)-1] == '\'') {
+				value = value[1 : len(value)-1]
+			}
+		}
+		result[key] = value
+	}
+	return result, nil
+}
+
+// encodeEnv writes a flat object as dotenv lines. Nested values are encoded
+// as compact JSON since env values are plain strings.
+func encodeEnv(value interface{}) ([]byte, error) {
+	root, ok := value.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("env output requires an object with key/value pairs")
+	}
+	var b strings.Builder
+	for _, key := range sortedMapKeys(root) {
+		b.WriteString(key)
+		b.WriteString("=")
+		b.WriteString(envValue(flatStructuredValue(root[key])))
+		b.WriteString("\n")
+	}
+	return []byte(b.String()), nil
+}
+
+func envValue(value string) string {
+	if value == "" || strings.ContainsAny(value, " \t\n\"'#$\\") {
+		return strconv.Quote(value)
+	}
+	return value
+}
+
+func decodeCSV(data []byte, delimiter rune) (interface{}, error) {
 	reader := csv.NewReader(bytes.NewReader(data))
+	reader.Comma = delimiter
 	reader.FieldsPerRecord = -1
 	reader.TrimLeadingSpace = true
 	records, err := reader.ReadAll()
@@ -175,11 +444,12 @@ func decodeCSV(data []byte) (interface{}, error) {
 	return rows, nil
 }
 
-func encodeCSV(value interface{}) ([]byte, error) {
+func encodeCSV(value interface{}, delimiter rune) ([]byte, error) {
 	rows := rowsForCSV(value)
 	headers := csvHeaders(rows)
 	var buf bytes.Buffer
 	writer := csv.NewWriter(&buf)
+	writer.Comma = delimiter
 	if err := writer.Write(headers); err != nil {
 		return nil, err
 	}

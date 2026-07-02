@@ -180,13 +180,21 @@ func (c *DynamicConverter) command(job domain.ConvertJob) (ports.Command, error)
 	argTemplates := argsOrDefault(c.template.Args)
 	args := make([]string, 0, len(argTemplates))
 	for _, arg := range argTemplates {
-		args = append(args, expand(arg, job))
+		// A literal {args} splices user-supplied pass-through arguments
+		// (tool options key "args") into the command line.
+		if arg == "{args}" {
+			for _, value := range job.Options.ToolOptions.Values(c.id, "args") {
+				args = append(args, strings.Fields(value)...)
+			}
+			continue
+		}
+		args = append(args, c.expand(arg, job))
 	}
 
 	return ports.Command{
-		Name: expand(command, job),
+		Name: c.expand(command, job),
 		Args: args,
-		Dir:  expand(c.template.Dir, job),
+		Dir:  c.expand(c.template.Dir, job),
 	}, nil
 }
 
@@ -335,7 +343,7 @@ func argsOrDefault(args []string) []string {
 	return args
 }
 
-func expand(value string, job domain.ConvertJob) string {
+func (c *DynamicConverter) expand(value string, job domain.ConvertJob) string {
 	value = strings.ReplaceAll(value, "{input}", job.InputPath)
 	value = strings.ReplaceAll(value, "{output}", job.OutputPath)
 	value = strings.ReplaceAll(value, "{input_format}", job.InputFormat.String())
@@ -343,7 +351,24 @@ func expand(value string, job domain.ConvertJob) string {
 	value = strings.ReplaceAll(value, "{quality}", strconv.Itoa(job.Options.Quality))
 	value = strings.ReplaceAll(value, "{resize}", job.Options.Resize)
 	value = strings.ReplaceAll(value, "{action}", job.Options.Action.String())
-	return value
+	// {opt:<key>} expands to the first configured tool option value for this
+	// tool id, so config-defined converters accept user options too.
+	for {
+		start := strings.Index(value, "{opt:")
+		if start < 0 {
+			return value
+		}
+		end := strings.Index(value[start:], "}")
+		if end < 0 {
+			return value
+		}
+		key := value[start+len("{opt:") : start+end]
+		replacement := ""
+		if values := job.Options.ToolOptions.Values(c.id, key); len(values) > 0 {
+			replacement = values[0]
+		}
+		value = value[:start] + replacement + value[start+end+1:]
+	}
 }
 
 func dynamicCommandError(command ports.Command, result ports.CommandResult, err error) error {

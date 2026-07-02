@@ -6,18 +6,40 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"sync"
 
 	"github.com/shellcell/convert/internal/ports"
 )
 
-type Runner struct{}
-
-func NewRunner() *Runner {
-	return &Runner{}
+type lookPathResult struct {
+	path string
+	err  error
 }
 
+type Runner struct {
+	mu       sync.Mutex
+	lookups  map[string]lookPathResult
+}
+
+func NewRunner() *Runner {
+	return &Runner{lookups: map[string]lookPathResult{}}
+}
+
+// LookPath caches results: availability checks run for every backend and
+// format choice, and PATH scans are comparatively expensive.
 func (r *Runner) LookPath(name string) (string, error) {
-	return exec.LookPath(name)
+	r.mu.Lock()
+	cached, ok := r.lookups[name]
+	r.mu.Unlock()
+	if ok {
+		return cached.path, cached.err
+	}
+
+	path, err := exec.LookPath(name)
+	r.mu.Lock()
+	r.lookups[name] = lookPathResult{path: path, err: err}
+	r.mu.Unlock()
+	return path, err
 }
 
 func (r *Runner) Run(ctx context.Context, command ports.Command) (ports.CommandResult, error) {

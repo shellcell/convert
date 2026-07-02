@@ -5,13 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"runtime"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/shellcell/convert/internal/domain"
 	"github.com/shellcell/convert/internal/ports"
+	"github.com/shellcell/convert/internal/shell"
 )
 
 type Service struct {
@@ -23,6 +22,10 @@ type Service struct {
 	advisor     ports.InstallAdvisor
 	preferences Preferences
 	progress    ports.ProgressReporter
+
+	// formatCache remembers detected input formats per path; detection can
+	// stat and read files and runs several times per interactive flow.
+	formatCache map[string]domain.Format
 }
 
 type ConvertRequest struct {
@@ -134,7 +137,18 @@ func NewService(converters []ports.Converter, discovery ports.FileDiscovery, fs 
 		advisor:     advisor,
 		preferences: preferences,
 		progress:    progress,
+		formatCache: map[string]domain.Format{},
 	}
+}
+
+// plannedJob is one input after planning: either a runnable job with its
+// selected converter, or the error that stopped it from becoming runnable.
+type plannedJob struct {
+	input     string
+	job       domain.ConvertJob
+	converter ports.Converter
+	err       error
+	built     bool
 }
 
 func (s *Service) Convert(ctx context.Context, req ConvertRequest) (RunReport, error) {
@@ -151,102 +165,162 @@ func (s *Service) Convert(ctx context.Context, req ConvertRequest) (RunReport, e
 		}
 	}
 
-	s.progress.Start(len(req.Inputs))
+	plans := s.planJobs(ctx, req)
+
+	review, err := s.reviewBatch(ctx, plans)
+	if err != nil {
+		return report, err
+	}
+
+	s.progress.Start(len(plans))
 	defer s.progress.Finish()
-	for i, input := range req.Inputs {
+	for i, plan := range plans {
 		index := i + 1
-		job, err := s.buildJob(ctx, input, req)
-		if err != nil {
-			s.progress.JobFailed(index, len(req.Inputs), domain.ConvertJob{InputPath: input}, "", err)
-			report.Items = append(report.Items, jobReportFromError(input, domain.Format(""), domain.Format(""), "", err, nil))
-			continue
-		}
-
-		converter, err := s.pickConverter(job.InputFormat, job.OutputFormat, job.Options)
-		if err != nil {
-			if errors.Is(err, domain.ErrUnsupportedConvert) {
-				s.progress.JobSkipped(index, len(req.Inputs), job.InputPath, job.OutputPath, err.Error())
+		switch {
+		case plan.err != nil && !plan.built:
+			s.progress.JobFailed(index, len(plans), domain.ConvertJob{InputPath: plan.input}, "", plan.err)
+			report.Items = append(report.Items, jobReportFromError(plan.input, "", "", "", plan.err, nil))
+		case plan.err != nil:
+			if errors.Is(plan.err, domain.ErrUnsupportedConvert) {
+				s.progress.JobSkipped(index, len(plans), plan.job.InputPath, plan.job.OutputPath, plan.err.Error())
 			} else {
-				s.progress.JobFailed(index, len(req.Inputs), job, "", err)
+				s.progress.JobFailed(index, len(plans), plan.job, "", plan.err)
 			}
-			report.Items = append(report.Items, s.reportForJobError(job, err))
-			continue
-		}
-
-		review, err := s.reviewCommand(ctx, converter, job)
-		if err != nil {
-			return report, err
-		}
-		if review.cancelled {
-			s.progress.JobSkipped(index, len(req.Inputs), job.InputPath, job.OutputPath, "cancelled")
+			report.Items = append(report.Items, s.reportForJobError(plan.job, plan.err))
+		case review.cancelled:
+			s.progress.JobSkipped(index, len(plans), plan.job.InputPath, plan.job.OutputPath, "cancelled")
 			report.Items = append(report.Items, JobReport{
-				InputPath:    job.InputPath,
-				OutputPath:   job.OutputPath,
-				InputFormat:  job.InputFormat,
-				OutputFormat: job.OutputFormat,
-				Backend:      converter.ID(),
+				InputPath:    plan.job.InputPath,
+				OutputPath:   plan.job.OutputPath,
+				InputFormat:  plan.job.InputFormat,
+				OutputFormat: plan.job.OutputFormat,
+				Backend:      plan.converter.ID(),
 				Status:       StatusSkipped,
 				Message:      "cancelled",
 			})
-			continue
+		default:
+			report.Items = append(report.Items, s.executeJob(ctx, index, len(plans), plan, review.editedCommand))
 		}
-
-		s.progress.JobStart(index, len(req.Inputs), job, converter.ID())
-		var result domain.ConversionResult
-		if review.editedCommand != "" {
-			if override, ok := converter.(ports.CommandOverrideConverter); ok {
-				result, err = override.ConvertWithCommand(ctx, job, review.editedCommand)
-			} else {
-				result, err = s.runEditedCommand(ctx, review.editedCommand, job, converter.ID())
-			}
-		} else {
-			result, err = converter.Convert(ctx, job)
-		}
-		if err != nil {
-			hints := s.installHintsFromError(err)
-			s.progress.JobFailed(index, len(req.Inputs), job, converter.ID(), err)
-			report.Items = append(report.Items, JobReport{
-				InputPath:    job.InputPath,
-				OutputPath:   job.OutputPath,
-				InputFormat:  job.InputFormat,
-				OutputFormat: job.OutputFormat,
-				Backend:      converter.ID(),
-				Status:       StatusFailed,
-				Message:      err.Error(),
-				Err:          err,
-				InstallHints: hints,
-			})
-			continue
-		}
-
-		s.progress.JobSuccess(index, len(req.Inputs), result.Job, result.Backend)
-		report.Items = append(report.Items, JobReport{
-			InputPath:    result.Job.InputPath,
-			OutputPath:   result.OutputPath,
-			InputFormat:  result.Job.InputFormat,
-			OutputFormat: result.Job.OutputFormat,
-			Backend:      result.Backend,
-			Status:       StatusConverted,
-			Message:      "ok",
-		})
 	}
 
 	return report, nil
 }
 
-func (s *Service) reviewCommand(ctx context.Context, converter ports.Converter, job domain.ConvertJob) (commandReview, error) {
+func (s *Service) planJobs(ctx context.Context, req ConvertRequest) []plannedJob {
+	plans := make([]plannedJob, 0, len(req.Inputs))
+	for _, input := range req.Inputs {
+		plan := plannedJob{input: input}
+		job, err := s.buildJob(ctx, input, req)
+		if err != nil {
+			plan.err = err
+			plans = append(plans, plan)
+			continue
+		}
+		plan.job = job
+		plan.built = true
+
+		converter, err := s.pickConverter(job.InputFormat, job.OutputFormat, job.Options)
+		if err != nil {
+			plan.err = err
+			plans = append(plans, plan)
+			continue
+		}
+		plan.converter = converter
+		plans = append(plans, plan)
+	}
+	return plans
+}
+
+func (s *Service) executeJob(ctx context.Context, index int, total int, plan plannedJob, editedCommand string) JobReport {
+	job := plan.job
+	converter := plan.converter
+	s.progress.JobStart(index, total, job, converter.ID())
+
+	var result domain.ConversionResult
+	var err error
+	if editedCommand != "" {
+		if override, ok := converter.(ports.CommandOverrideConverter); ok {
+			result, err = override.ConvertWithCommand(ctx, job, editedCommand)
+		} else {
+			result, err = s.runEditedCommand(ctx, editedCommand, job, converter.ID())
+		}
+	} else {
+		result, err = converter.Convert(ctx, job)
+	}
+	if err != nil {
+		s.progress.JobFailed(index, total, job, converter.ID(), err)
+		return JobReport{
+			InputPath:    job.InputPath,
+			OutputPath:   job.OutputPath,
+			InputFormat:  job.InputFormat,
+			OutputFormat: job.OutputFormat,
+			Backend:      converter.ID(),
+			Status:       StatusFailed,
+			Message:      err.Error(),
+			Err:          err,
+			InstallHints: s.installHintsFromError(err),
+		}
+	}
+
+	s.progress.JobSuccess(index, total, result.Job, result.Backend)
+	return JobReport{
+		InputPath:    result.Job.InputPath,
+		OutputPath:   result.OutputPath,
+		InputFormat:  result.Job.InputFormat,
+		OutputFormat: result.Job.OutputFormat,
+		Backend:      result.Backend,
+		Status:       StatusConverted,
+		Message:      "ok",
+	}
+}
+
+// reviewBatch asks for one confirmation covering every runnable job in the
+// batch. In-process converters without external commands run unconfirmed;
+// editing is offered only when the batch contains exactly one job.
+func (s *Service) reviewBatch(ctx context.Context, plans []plannedJob) (commandReview, error) {
 	if s.prompt == nil {
 		return commandReview{}, nil
 	}
 
-	review := ports.CommandReview{Backend: converter.ID(), Message: "internal converter; no external command"}
-	if previewer, ok := converter.(ports.CommandPreviewer); ok {
-		preview := previewer.PreviewCommands(job)
-		if len(preview.Commands) > 0 {
-			review.Commands = preview.Commands
-			review.Editable = preview.Editable
-			review.EditCommand = editableCommandLine(preview)
+	var runnable []plannedJob
+	for _, plan := range plans {
+		if plan.err == nil && plan.converter != nil {
+			runnable = append(runnable, plan)
 		}
+	}
+	if len(runnable) == 0 {
+		return commandReview{}, nil
+	}
+
+	review := ports.CommandReview{JobCount: len(runnable)}
+	backends := make([]string, 0, 2)
+	seenBackend := map[string]bool{}
+	var preview ports.CommandPreview
+	for _, plan := range runnable {
+		id := plan.converter.ID()
+		if seenBackend[id] {
+			continue
+		}
+		seenBackend[id] = true
+		backends = append(backends, id)
+
+		if previewer, ok := plan.converter.(ports.CommandPreviewer); ok {
+			jobPreview := previewer.PreviewCommands(plan.job)
+			if len(jobPreview.Commands) > 0 {
+				review.Commands = append(review.Commands, jobPreview.Commands...)
+				preview = jobPreview
+			}
+		}
+	}
+	review.Backend = strings.Join(backends, ", ")
+
+	// Nothing shells out: no command to review, run without a prompt.
+	if len(review.Commands) == 0 {
+		return commandReview{}, nil
+	}
+	if len(runnable) == 1 {
+		review.Editable = preview.Editable
+		review.EditCommand = editableCommandLine(preview)
 	}
 
 	action, editedCommand, err := s.prompt.ConfirmCommand(ctx, review)
@@ -273,10 +347,9 @@ func (s *Service) runEditedCommand(ctx context.Context, command string, job doma
 	if s.runner == nil {
 		return domain.ConversionResult{}, errors.New("command runner is required")
 	}
-	shellCommand := shellCommand(command)
-	result, err := s.runner.Run(ctx, shellCommand)
+	result, err := s.runner.Run(ctx, shell.Command(command))
 	if err != nil {
-		return domain.ConversionResult{}, commandStringError(command, result, err)
+		return domain.ConversionResult{}, shell.CommandStringError(command, result, err)
 	}
 	return domain.ConversionResult{Job: job, Backend: backend, OutputPath: job.OutputPath}, nil
 }
@@ -384,7 +457,7 @@ func (s *Service) Interactive(ctx context.Context, req InteractiveRequest) (RunR
 			resize = selectedResize
 		}
 	}
-	if action == "" && outputFormat.IsImage() && s.allInputsMatchFormat(inputs, req.InputFormat, outputFormat) {
+	if action == "" && supportsSameFormatAction(outputFormat) && s.allInputsMatchFormat(inputs, req.InputFormat, outputFormat) {
 		selectedAction, err := s.prompt.SelectSameFormatAction(ctx, outputFormat)
 		if err != nil {
 			return RunReport{}, err
@@ -393,7 +466,7 @@ func (s *Service) Interactive(ctx context.Context, req InteractiveRequest) (RunR
 
 		switch action {
 		case domain.ActionCompress:
-			if quality == 0 {
+			if quality == 0 && supportsQuality(outputFormat) {
 				quality, err = s.prompt.AskQuality(ctx, 85)
 				if err != nil {
 					return RunReport{}, err
@@ -409,6 +482,11 @@ func (s *Service) Interactive(ctx context.Context, req InteractiveRequest) (RunR
 		}
 	}
 
+	toolOptions, err := s.askConverterOptions(ctx, inputs, req.InputFormat, outputFormat, req.ToolOptions)
+	if err != nil {
+		return RunReport{}, err
+	}
+
 	return s.Convert(ctx, ConvertRequest{
 		Inputs:       inputs,
 		InputFormat:  req.InputFormat,
@@ -419,8 +497,73 @@ func (s *Service) Interactive(ctx context.Context, req InteractiveRequest) (RunR
 		Quality:      quality,
 		Action:       action,
 		Resize:       resize,
-		ToolOptions:  req.ToolOptions,
+		ToolOptions:  toolOptions,
 	})
+}
+
+// askConverterOptions offers the tunable options declared by the backends
+// that will run this batch. Skipping keeps every backend default.
+func (s *Service) askConverterOptions(ctx context.Context, inputs []string, inputOverride domain.Format, output domain.Format, requestOptions domain.ToolOptions) (domain.ToolOptions, error) {
+	specs := s.optionSpecsForBatch(inputs, inputOverride, output, requestOptions)
+	if len(specs) == 0 {
+		return requestOptions, nil
+	}
+
+	configure, err := s.prompt.ConfirmOption(ctx, "Set converter options?", "Optional. Choose No to use the backend defaults.", false)
+	if err != nil {
+		return nil, err
+	}
+	if !configure {
+		return requestOptions, nil
+	}
+
+	options := requestOptions.Clone()
+	for _, spec := range specs {
+		value, err := s.prompt.AskText(ctx, spec.Title, spec.Description, spec.Default)
+		if err != nil {
+			return nil, err
+		}
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		options = options.Merge(domain.ToolOptions{
+			strings.ToLower(spec.Tool): {strings.ToLower(spec.Key): []string{value}},
+		})
+	}
+	return options, nil
+}
+
+func (s *Service) optionSpecsForBatch(inputs []string, inputOverride domain.Format, output domain.Format, requestOptions domain.ToolOptions) []ports.OptionSpec {
+	var specs []ports.OptionSpec
+	seen := map[string]bool{}
+	seenInput := map[domain.Format]bool{}
+	for _, input := range inputs {
+		inputFormat, err := s.detectInputFormat(input, inputOverride)
+		if err != nil || seenInput[inputFormat] {
+			continue
+		}
+		seenInput[inputFormat] = true
+
+		options := domain.ConvertOptions{ToolOptions: s.preferences.OptionsFor(inputFormat, output).Merge(requestOptions)}
+		converter, err := s.pickConverter(inputFormat, output, options)
+		if err != nil {
+			continue
+		}
+		aware, ok := converter.(ports.OptionsAware)
+		if !ok {
+			continue
+		}
+		for _, spec := range aware.OptionSpecs(inputFormat, output) {
+			key := strings.ToLower(spec.Tool) + "\x00" + strings.ToLower(spec.Key)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			specs = append(specs, spec)
+		}
+	}
+	return specs
 }
 
 func (s *Service) BuildJobs(req ConvertRequest) ([]domain.ConvertJob, error) {
@@ -607,7 +750,18 @@ func (s *Service) detectInputFormat(input string, override domain.Format) (domai
 	if override != "" {
 		return override, nil
 	}
+	if cached, ok := s.formatCache[input]; ok {
+		return cached, nil
+	}
 
+	format, err := s.detectInputFormatUncached(input)
+	if err == nil && s.formatCache != nil {
+		s.formatCache[input] = format
+	}
+	return format, err
+}
+
+func (s *Service) detectInputFormatUncached(input string) (domain.Format, error) {
 	if isDir, err := s.fs.IsDir(input); err == nil && isDir {
 		return domain.FormatDir, nil
 	}
@@ -707,11 +861,39 @@ func outputExistsError(output string) error {
 	return fmt.Errorf("%w: output already exists: %s", domain.ErrInvalidJob, output)
 }
 
+// convertersByPriority orders converters by their declared capability
+// priority for the pair (highest first), keeping registration order between
+// equals. User pair preferences still override this ordering.
+func (s *Service) convertersByPriority(input domain.Format, output domain.Format) []ports.Converter {
+	type ranked struct {
+		converter ports.Converter
+		priority  int
+	}
+	rankedConverters := make([]ranked, 0, len(s.converters))
+	for _, converter := range s.converters {
+		priority := 0
+		for _, capability := range converter.Capabilities() {
+			if capability.Input == input && capability.Output == output && capability.Priority > priority {
+				priority = capability.Priority
+			}
+		}
+		rankedConverters = append(rankedConverters, ranked{converter: converter, priority: priority})
+	}
+	sort.SliceStable(rankedConverters, func(i, j int) bool {
+		return rankedConverters[i].priority > rankedConverters[j].priority
+	})
+	ordered := make([]ports.Converter, len(rankedConverters))
+	for i, item := range rankedConverters {
+		ordered[i] = item.converter
+	}
+	return ordered
+}
+
 func (s *Service) pickConverter(input domain.Format, output domain.Format, options domain.ConvertOptions) (ports.Converter, error) {
 	var capable []ports.Converter
 	var missing []string
 	var hints []ports.InstallSuggestion
-	for _, converter := range s.preferences.OrderConverters(input, output, s.converters) {
+	for _, converter := range s.preferences.OrderConverters(input, output, s.convertersByPriority(input, output)) {
 		if !converter.CanConvert(input, output) {
 			continue
 		}
@@ -738,7 +920,7 @@ func (s *Service) pickConverter(input domain.Format, output domain.Format, optio
 
 func (s *Service) conversionAvailable(input domain.Format, output domain.Format, options domain.ConvertOptions) (bool, string) {
 	var reasons []string
-	for _, converter := range s.preferences.OrderConverters(input, output, s.converters) {
+	for _, converter := range s.preferences.OrderConverters(input, output, s.convertersByPriority(input, output)) {
 		if !converter.CanConvert(input, output) {
 			continue
 		}
@@ -871,6 +1053,16 @@ func svgOutputNeedsSize(output domain.Format) bool {
 	return output.IsImage() || output.IsVideo()
 }
 
+// supportsSameFormatAction lists the formats where a same-format run has a
+// meaningful compress/resize interpretation beyond a plain copy.
+func supportsSameFormatAction(format domain.Format) bool {
+	return format.IsImage() || format.IsVideo() || format == domain.FormatPDF || format == domain.FormatQCOW2
+}
+
+func supportsQuality(format domain.Format) bool {
+	return format.IsImage() || format.IsVideo() || format == domain.FormatPDF
+}
+
 func outputPathFor(input string, inputFormat domain.Format, outputFormat domain.Format, outputDir string, options domain.ConvertOptions) string {
 	base := baseNameWithoutFormat(input, inputFormat)
 	if inputFormat == outputFormat {
@@ -904,48 +1096,7 @@ func editableCommandLine(preview ports.CommandPreview) string {
 	if index < 0 || index >= len(preview.Commands) {
 		index = 0
 	}
-	return commandLine(preview.Commands[index])
-}
-
-func commandLine(command ports.Command) string {
-	parts := []string{command.Name}
-	parts = append(parts, command.Args...)
-	for i, part := range parts {
-		parts[i] = shellQuote(part)
-	}
-	line := strings.Join(parts, " ")
-	if command.Dir != "" {
-		return "cd " + shellQuote(command.Dir) + " && " + line
-	}
-	return line
-}
-
-func commandStringError(command string, result ports.CommandResult, err error) error {
-	if err == nil {
-		return nil
-	}
-	message := fmt.Sprintf("command: %s", command)
-	if result.Stderr != "" {
-		return fmt.Errorf("%s: %w: %s", message, err, result.Stderr)
-	}
-	if result.Stdout != "" {
-		return fmt.Errorf("%s: %w: %s", message, err, result.Stdout)
-	}
-	return fmt.Errorf("%s: %w", message, err)
-}
-
-func shellCommand(command string) ports.Command {
-	if runtime.GOOS == "windows" {
-		return ports.Command{Name: "cmd", Args: []string{"/C", command}}
-	}
-	return ports.Command{Name: "sh", Args: []string{"-c", command}}
-}
-
-func shellQuote(value string) string {
-	if value == "" || strings.ContainsAny(value, " \t\n\"'\\$`;&|<>!*?[]{}()") {
-		return strconv.Quote(value)
-	}
-	return value
+	return shell.Line(preview.Commands[index])
 }
 
 func baseNameWithoutFormat(path string, format domain.Format) string {
