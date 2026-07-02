@@ -62,12 +62,28 @@ func (c *Pandoc) MissingDependencies(input domain.Format, output domain.Format, 
 }
 
 func (c *Pandoc) Convert(ctx context.Context, job domain.ConvertJob) (domain.ConversionResult, error) {
+	args, err := c.args(job)
+	if err != nil {
+		return domain.ConversionResult{}, err
+	}
+	return runSimple(ctx, c.runner, "pandoc", args, job, c.ID())
+}
+
+func (c *Pandoc) PreviewCommands(job domain.ConvertJob) ports.CommandPreview {
+	args, err := c.args(job)
+	if err != nil {
+		return ports.CommandPreview{}
+	}
+	return previewCommand("pandoc", args)
+}
+
+func (c *Pandoc) args(job domain.ConvertJob) ([]string, error) {
 	args := []string{job.InputPath}
 	if job.OutputFormat == domain.FormatPDF {
 		engines := pdfEngines(job.Options)
 		engine, ok := c.availablePDFEngine(engines)
 		if !ok {
-			return domain.ConversionResult{}, domain.MissingDependencyError{
+			return nil, domain.MissingDependencyError{
 				Message:  "pandoc PDF output requires a PDF engine: install one of " + joinList(engines),
 				Commands: engines,
 			}
@@ -75,7 +91,7 @@ func (c *Pandoc) Convert(ctx context.Context, job domain.ConvertJob) (domain.Con
 		args = append(args, "--pdf-engine", engine)
 	}
 	args = append(args, "-o", job.OutputPath)
-	return runSimple(ctx, c.runner, "pandoc", args, job, c.ID())
+	return args, nil
 }
 
 func pdfEngines(options domain.ConvertOptions) []string {

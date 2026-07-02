@@ -71,9 +71,17 @@ func (c *SevenZip) CanConvert(input domain.Format, output domain.Format) bool {
 }
 
 func (c *SevenZip) Convert(ctx context.Context, job domain.ConvertJob) (domain.ConversionResult, error) {
+	return runSimple(ctx, c.runner, "7z", c.args(job), job, c.ID())
+}
+
+func (c *SevenZip) PreviewCommands(job domain.ConvertJob) ports.CommandPreview {
+	return previewCommand("7z", c.args(job))
+}
+
+func (c *SevenZip) args(job domain.ConvertJob) []string {
 	if job.OutputFormat == domain.FormatDir {
-		return runSimple(ctx, c.runner, "7z", []string{"x", "-y", "-o" + job.OutputPath, job.InputPath}, job, c.ID())
+		return []string{"x", "-y", "-o" + job.OutputPath, job.InputPath}
 	}
 
-	return runSimple(ctx, c.runner, "7z", []string{"a", job.OutputPath, job.InputPath}, job, c.ID())
+	return []string{"a", "-y", job.OutputPath, job.InputPath}
 }

@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -61,26 +62,64 @@ func resizeDimensions(value string) (string, string) {
 	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
 }
 
-func commandError(result ports.CommandResult, err error) error {
+func commandError(command ports.Command, result ports.CommandResult, err error) error {
 	if err == nil {
 		return nil
 	}
+	message := fmt.Sprintf("command: %s", commandLine(command))
 	if result.Stderr != "" {
-		return fmt.Errorf("%w: %s", err, result.Stderr)
+		return fmt.Errorf("%s: %w: %s", message, err, result.Stderr)
 	}
 	if result.Stdout != "" {
-		return fmt.Errorf("%w: %s", err, result.Stdout)
+		return fmt.Errorf("%s: %w: %s", message, err, result.Stdout)
 	}
-	return err
+	return fmt.Errorf("%s: %w", message, err)
+}
+
+func commandStringError(command string, result ports.CommandResult, err error) error {
+	if err == nil {
+		return nil
+	}
+	message := fmt.Sprintf("command: %s", command)
+	if result.Stderr != "" {
+		return fmt.Errorf("%s: %w: %s", message, err, result.Stderr)
+	}
+	if result.Stdout != "" {
+		return fmt.Errorf("%s: %w: %s", message, err, result.Stdout)
+	}
+	return fmt.Errorf("%s: %w", message, err)
+}
+
+func shellCommand(command string) ports.Command {
+	if runtime.GOOS == "windows" {
+		return ports.Command{Name: "cmd", Args: []string{"/C", command}}
+	}
+	return ports.Command{Name: "sh", Args: []string{"-c", command}}
+}
+
+func commandLine(command ports.Command) string {
+	parts := []string{command.Name}
+	parts = append(parts, command.Args...)
+	for i, part := range parts {
+		if part == "" || strings.ContainsAny(part, " \t\n\"'\\$`") {
+			parts[i] = strconv.Quote(part)
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 func runSimple(ctx context.Context, runner ports.CommandRunner, command string, args []string, job domain.ConvertJob, backend string) (domain.ConversionResult, error) {
-	result, err := runner.Run(ctx, ports.Command{Name: command, Args: args})
+	cmd := ports.Command{Name: command, Args: args}
+	result, err := runner.Run(ctx, cmd)
 	if err != nil {
-		return domain.ConversionResult{}, commandError(result, err)
+		return domain.ConversionResult{}, commandError(cmd, result, err)
 	}
 
 	return domain.ConversionResult{Job: job, Backend: backend, OutputPath: job.OutputPath}, nil
+}
+
+func previewCommand(command string, args []string) ports.CommandPreview {
+	return ports.CommandPreview{Commands: []ports.Command{{Name: command, Args: args}}, Editable: true}
 }
 
 func moveFile(from string, to string) error {

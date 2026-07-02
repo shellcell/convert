@@ -43,5 +43,43 @@ func (c *GDAL) CanConvert(input domain.Format, output domain.Format) bool {
 }
 
 func (c *GDAL) Convert(ctx context.Context, job domain.ConvertJob) (domain.ConversionResult, error) {
-	return runSimple(ctx, c.runner, "ogr2ogr", []string{job.OutputPath, job.InputPath}, job, c.ID())
+	return runSimple(ctx, c.runner, "ogr2ogr", c.args(job), job, c.ID())
+}
+
+func (c *GDAL) PreviewCommands(job domain.ConvertJob) ports.CommandPreview {
+	return previewCommand("ogr2ogr", c.args(job))
+}
+
+func (c *GDAL) args(job domain.ConvertJob) []string {
+	args := []string{}
+	if driver := gdalDriver(job.OutputFormat); driver != "" {
+		args = append(args, "-f", driver)
+	}
+	args = append(args, job.OutputPath, job.InputPath)
+	return args
+}
+
+func gdalDriver(format domain.Format) string {
+	switch format {
+	case domain.FormatGeoJSON:
+		return "GeoJSON"
+	case domain.FormatTopoJSON:
+		return "TopoJSON"
+	case domain.FormatKML:
+		return "KML"
+	case domain.FormatGPKG:
+		return "GPKG"
+	case domain.FormatGML:
+		return "GML"
+	case domain.FormatGPX:
+		return "GPX"
+	case domain.FormatSHP:
+		return "ESRI Shapefile"
+	case domain.FormatCSV:
+		return "CSV"
+	case domain.FormatSQLite:
+		return "SQLite"
+	default:
+		return ""
+	}
 }

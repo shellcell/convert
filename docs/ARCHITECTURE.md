@@ -61,6 +61,7 @@ The app layer owns use cases and policies:
 - same-format action handling
 - archive extraction/compression routing
 - backend selection
+- command preview confirmation before a job starts
 - dependency status, runtime availability, and install hints
 - output format availability choices for interactive prompts
 - final run report data
@@ -89,6 +90,7 @@ Ports are interfaces owned by the core:
 - `InstallAdvisor`
 - `ProgressReporter`
 - `RuntimeDependencyAware`
+- `CommandPreviewer`
 
 Adapters implement these interfaces.
 
@@ -137,6 +139,10 @@ The file picker shows supported files and directories. Directories can be opened
 The file picker preserves cursor, scroll offset, and filter text per visited directory, so going deeper and back restores the previous position.
 
 The output format picker receives `FormatChoice` values from the application layer. Unavailable formats are still displayed and dimmed with the missing dependency reason, but remain selectable. If selected, conversion continues into normal backend selection so the final report can include install hints for missing tools.
+
+Before each terminal job starts, the prompt adapter shows the selected backend and command preview. Option flags are split onto indented colored lines to avoid unreadable wrapping. Supported previews can choose which command is editable; edited commands run through the shell for that job. Non-terminal runs proceed without the confirmation prompt.
+
+If a generated output path already exists and overwrite is not enabled, terminal mode asks for a different output path. Non-terminal mode keeps the strict failure behavior.
 
 Interactive flow for `convert`:
 
@@ -237,6 +243,8 @@ Current built-ins:
 Config-defined converters are appended after built-ins.
 
 Converters can implement `InputCapabilityAware` to expose capabilities based on a specific input file. The animated SVG backend uses this to show video/animation outputs only when an SVG contains animation markers.
+
+Converters that execute external tools should implement `CommandPreviewer` so the app can show the backend command before execution. Converters with internal setup steps can implement `CommandOverrideConverter` to run an edited command inside the normal pipeline. Built-in in-process converters report that no external command is used.
 
 ## Backend Selection
 

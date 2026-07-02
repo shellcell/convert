@@ -15,6 +15,7 @@ import (
 	"github.com/shellcell/convert/internal/app"
 	"github.com/shellcell/convert/internal/domain"
 	"github.com/shellcell/convert/internal/ports"
+	"github.com/shellcell/convert/internal/theme"
 )
 
 type Runner struct {
@@ -32,19 +33,23 @@ type Runner struct {
 	hintStyle  lipgloss.Style
 }
 
-func NewRunner(service *app.Service, fs ports.FileSystem, stdin io.Reader, stdout io.Writer, stderr io.Writer) *Runner {
+func NewRunner(service *app.Service, fs ports.FileSystem, stdin io.Reader, stdout io.Writer, stderr io.Writer, palettes ...theme.Palette) *Runner {
+	palette := theme.Default()
+	if len(palettes) > 0 {
+		palette = palettes[0]
+	}
 	return &Runner{
 		service:    service,
 		fs:         fs,
 		stdin:      stdin,
 		stdout:     stdout,
 		stderr:     stderr,
-		titleStyle: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205")),
-		okStyle:    lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42")),
-		skipStyle:  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214")),
-		failStyle:  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("196")),
-		dimStyle:   lipgloss.NewStyle().Foreground(lipgloss.Color("245")),
-		hintStyle:  lipgloss.NewStyle().Foreground(lipgloss.Color("39")),
+		titleStyle: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(palette.Title)),
+		okStyle:    lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(palette.OK)),
+		skipStyle:  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(palette.Skip)),
+		failStyle:  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(palette.Fail)),
+		dimStyle:   lipgloss.NewStyle().Foreground(lipgloss.Color(palette.Dim)),
+		hintStyle:  lipgloss.NewStyle().Foreground(lipgloss.Color(palette.Hint)),
 	}
 }
 

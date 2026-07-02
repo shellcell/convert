@@ -36,6 +36,14 @@ func (c *Resvg) CanConvert(input domain.Format, output domain.Format) bool {
 }
 
 func (c *Resvg) Convert(ctx context.Context, job domain.ConvertJob) (domain.ConversionResult, error) {
+	return runSimple(ctx, c.runner, "resvg", c.args(job), job, c.ID())
+}
+
+func (c *Resvg) PreviewCommands(job domain.ConvertJob) ports.CommandPreview {
+	return previewCommand("resvg", c.args(job))
+}
+
+func (c *Resvg) args(job domain.ConvertJob) []string {
 	args := []string{}
 	if job.Options.Resize != "" {
 		width, height := resizeDimensions(job.Options.Resize)
@@ -47,5 +55,5 @@ func (c *Resvg) Convert(ctx context.Context, job domain.ConvertJob) (domain.Conv
 		}
 	}
 	args = append(args, job.InputPath, job.OutputPath)
-	return runSimple(ctx, c.runner, "resvg", args, job, c.ID())
+	return args
 }

@@ -59,11 +59,19 @@ func (c *ImageMagick) CanConvert(input domain.Format, output domain.Format) bool
 }
 
 func (c *ImageMagick) Convert(ctx context.Context, job domain.ConvertJob) (domain.ConversionResult, error) {
+	return runSimple(ctx, c.runner, "magick", c.args(job), job, c.ID())
+}
+
+func (c *ImageMagick) PreviewCommands(job domain.ConvertJob) ports.CommandPreview {
+	return previewCommand("magick", c.args(job))
+}
+
+func (c *ImageMagick) args(job domain.ConvertJob) []string {
 	args := []string{job.InputPath}
 	if job.Options.Resize != "" {
 		args = append(args, "-resize", job.Options.Resize)
 	}
 	args = append(args, qualityArgs(job)...)
 	args = append(args, job.OutputPath)
-	return runSimple(ctx, c.runner, "magick", args, job, c.ID())
+	return args
 }

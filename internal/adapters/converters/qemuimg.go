@@ -41,8 +41,15 @@ func (c *QemuImg) CanConvert(input domain.Format, output domain.Format) bool {
 }
 
 func (c *QemuImg) Convert(ctx context.Context, job domain.ConvertJob) (domain.ConversionResult, error) {
-	args := []string{"convert", "-O", qemuFormat(job.OutputFormat), job.InputPath, job.OutputPath}
-	return runSimple(ctx, c.runner, "qemu-img", args, job, c.ID())
+	return runSimple(ctx, c.runner, "qemu-img", c.args(job), job, c.ID())
+}
+
+func (c *QemuImg) PreviewCommands(job domain.ConvertJob) ports.CommandPreview {
+	return previewCommand("qemu-img", c.args(job))
+}
+
+func (c *QemuImg) args(job domain.ConvertJob) []string {
+	return []string{"convert", "-O", qemuFormat(job.OutputFormat), job.InputPath, job.OutputPath}
 }
 
 func qemuFormat(format domain.Format) string {

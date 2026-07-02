@@ -9,11 +9,22 @@ import (
 
 	"github.com/shellcell/convert/internal/app"
 	"github.com/shellcell/convert/internal/domain"
+	"github.com/shellcell/convert/internal/theme"
 )
 
 type Config struct {
-	Tools map[string]map[string]json.RawMessage `json:"tools"`
-	Pairs []PairConfig                          `json:"pairs"`
+	Tools          map[string]map[string]json.RawMessage `json:"tools"`
+	Pairs          []PairConfig                          `json:"pairs"`
+	Theme          string                                `json:"theme"`
+	Colors         map[string]string                     `json:"colors"`
+	CategoryColors map[string]string                     `json:"category_colors"`
+	UI             UIConfig                              `json:"ui"`
+}
+
+type UIConfig struct {
+	Theme          string            `json:"theme"`
+	Colors         map[string]string `json:"colors"`
+	CategoryColors map[string]string `json:"category_colors"`
 }
 
 type PairConfig struct {
@@ -24,28 +35,30 @@ type PairConfig struct {
 	Options     map[string]map[string]json.RawMessage `json:"options"`
 }
 
-func Load() (app.Preferences, error) {
+func Load() (app.Preferences, theme.Palette, error) {
 	paths, err := configPaths()
 	if err != nil {
-		return app.Preferences{}, err
+		return app.Preferences{}, theme.Default(), err
 	}
 
 	preferences := app.Preferences{ToolOptions: domain.ToolOptions{}}
+	palette := theme.Default()
 	for _, path := range paths {
 		config, err := readConfig(path)
 		if err != nil {
-			return preferences, err
+			return preferences, palette, err
 		}
 
-		loaded, err := build(config)
+		loaded, loadedPalette, err := build(config)
 		if err != nil {
-			return preferences, fmt.Errorf("%s: %w", path, err)
+			return preferences, palette, fmt.Errorf("%s: %w", path, err)
 		}
 		preferences.ToolOptions = preferences.ToolOptions.Merge(loaded.ToolOptions)
 		preferences.Pairs = append(preferences.Pairs, loaded.Pairs...)
+		palette = palette.Merge(loadedPalette)
 	}
 
-	return preferences, nil
+	return preferences, palette, nil
 }
 
 func configPaths() ([]string, error) {
@@ -86,16 +99,16 @@ func readConfig(path string) (Config, error) {
 	return config, nil
 }
 
-func build(config Config) (app.Preferences, error) {
+func build(config Config) (app.Preferences, theme.Palette, error) {
 	preferences := app.Preferences{ToolOptions: decodeToolOptions(config.Tools)}
 	for _, pairConfig := range config.Pairs {
 		input, err := domain.ParseFormat(pairConfig.Input)
 		if err != nil {
-			return preferences, err
+			return preferences, theme.Default(), err
 		}
 		output, err := domain.ParseFormat(pairConfig.Output)
 		if err != nil {
-			return preferences, err
+			return preferences, theme.Default(), err
 		}
 
 		toolOptions := decodeToolOptions(pairConfig.ToolOptions)
@@ -107,7 +120,49 @@ func build(config Config) (app.Preferences, error) {
 			ToolOptions: toolOptions,
 		})
 	}
-	return preferences, nil
+	return preferences, buildPalette(config), nil
+}
+
+func buildPalette(config Config) theme.Palette {
+	name := strings.TrimSpace(config.Theme)
+	if strings.TrimSpace(config.UI.Theme) != "" {
+		name = config.UI.Theme
+	}
+	palette := theme.Named(name)
+	palette = palette.Merge(theme.Palette{
+		Title:           config.Colors["title"],
+		Number:          config.Colors["number"],
+		Hint:            config.Colors["hint"],
+		Flag:            config.Colors["flag"],
+		BadgeForeground: config.Colors["badge_foreground"],
+		BadgeBackground: config.Colors["badge_background"],
+		Prompt:          config.Colors["prompt"],
+		OK:              config.Colors["ok"],
+		Skip:            config.Colors["skip"],
+		Fail:            config.Colors["fail"],
+		Dim:             config.Colors["dim"],
+		Selected:        config.Colors["selected"],
+		Error:           config.Colors["error"],
+		Unavailable:     config.Colors["unavailable"],
+		Categories:      config.CategoryColors,
+	})
+	return palette.Merge(theme.Palette{
+		Title:           config.UI.Colors["title"],
+		Number:          config.UI.Colors["number"],
+		Hint:            config.UI.Colors["hint"],
+		Flag:            config.UI.Colors["flag"],
+		BadgeForeground: config.UI.Colors["badge_foreground"],
+		BadgeBackground: config.UI.Colors["badge_background"],
+		Prompt:          config.UI.Colors["prompt"],
+		OK:              config.UI.Colors["ok"],
+		Skip:            config.UI.Colors["skip"],
+		Fail:            config.UI.Colors["fail"],
+		Dim:             config.UI.Colors["dim"],
+		Selected:        config.UI.Colors["selected"],
+		Error:           config.UI.Colors["error"],
+		Unavailable:     config.UI.Colors["unavailable"],
+		Categories:      config.UI.CategoryColors,
+	})
 }
 
 func decodeToolOptions(raw map[string]map[string]json.RawMessage) domain.ToolOptions {

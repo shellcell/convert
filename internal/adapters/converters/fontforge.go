@@ -41,6 +41,14 @@ func (c *FontForge) CanConvert(input domain.Format, output domain.Format) bool {
 }
 
 func (c *FontForge) Convert(ctx context.Context, job domain.ConvertJob) (domain.ConversionResult, error) {
+	return runSimple(ctx, c.runner, "fontforge", c.args(job), job, c.ID())
+}
+
+func (c *FontForge) PreviewCommands(job domain.ConvertJob) ports.CommandPreview {
+	return previewCommand("fontforge", c.args(job))
+}
+
+func (c *FontForge) args(job domain.ConvertJob) []string {
 	script := `Open($1); Generate($2); Close();`
-	return runSimple(ctx, c.runner, "fontforge", []string{"-lang=ff", "-c", script, job.InputPath, job.OutputPath}, job, c.ID())
+	return []string{"-lang=ff", "-c", script, job.InputPath, job.OutputPath}
 }

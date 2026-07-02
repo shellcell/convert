@@ -12,13 +12,15 @@ import (
 )
 
 type LibreOffice struct {
-	runner ports.CommandRunner
-	caps   []domain.ConversionCapability
+	runner  ports.CommandRunner
+	command string
+	caps    []domain.ConversionCapability
 }
 
 func NewLibreOffice(runner ports.CommandRunner) *LibreOffice {
 	return &LibreOffice{
-		runner: runner,
+		runner:  runner,
+		command: libreOfficeCommand(runner),
 		caps: []domain.ConversionCapability{
 			{Input: domain.FormatDOCX, Output: domain.FormatPDF, Priority: 80},
 			{Input: domain.FormatDOCX, Output: domain.FormatHTML, Priority: 80},
@@ -48,7 +50,7 @@ func NewLibreOffice(runner ports.CommandRunner) *LibreOffice {
 
 func (c *LibreOffice) ID() string { return "libreoffice" }
 
-func (c *LibreOffice) RequiredCommands() []string { return []string{"libreoffice"} }
+func (c *LibreOffice) RequiredCommands() []string { return []string{c.command} }
 
 func (c *LibreOffice) Capabilities() []domain.ConversionCapability {
 	return append([]domain.ConversionCapability(nil), c.caps...)
@@ -67,9 +69,10 @@ func (c *LibreOffice) Convert(ctx context.Context, job domain.ConvertJob) (domai
 
 	target := libreOfficeTarget(job.OutputFormat)
 	args := []string{"--headless", "--convert-to", target, "--outdir", tmpDir, job.InputPath}
-	result, err := c.runner.Run(ctx, ports.Command{Name: "libreoffice", Args: args})
+	command := ports.Command{Name: c.command, Args: args}
+	result, err := c.runner.Run(ctx, command)
 	if err != nil {
-		return domain.ConversionResult{}, commandError(result, err)
+		return domain.ConversionResult{}, commandError(command, result, err)
 	}
 
 	converted, err := findLibreOfficeOutput(tmpDir, job.InputPath, job.OutputFormat)
@@ -84,6 +87,34 @@ func (c *LibreOffice) Convert(ctx context.Context, job domain.ConvertJob) (domai
 	}
 
 	return domain.ConversionResult{Job: job, Backend: c.ID(), OutputPath: job.OutputPath}, nil
+}
+
+func (c *LibreOffice) PreviewCommands(job domain.ConvertJob) ports.CommandPreview {
+	return ports.CommandPreview{
+		Commands: []ports.Command{{
+			Name: c.command,
+			Args: []string{"--headless", "--convert-to", libreOfficeTarget(job.OutputFormat), "--outdir", "<temp-dir>", job.InputPath},
+		}},
+	}
+}
+
+func libreOfficeCommand(runner ports.CommandRunner) string {
+	if runner != nil {
+		for _, command := range []string{"libreoffice", "soffice"} {
+			if _, err := runner.LookPath(command); err == nil {
+				return command
+			}
+		}
+	}
+	for _, command := range []string{
+		"/Applications/LibreOffice.app/Contents/MacOS/soffice",
+		filepath.Join(os.Getenv("HOME"), "Applications", "LibreOffice.app", "Contents", "MacOS", "soffice"),
+	} {
+		if executableFile(command) {
+			return command
+		}
+	}
+	return "libreoffice"
 }
 
 func libreOfficeTarget(format domain.Format) string {

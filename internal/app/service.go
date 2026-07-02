@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/shellcell/convert/internal/domain"
@@ -110,6 +112,11 @@ type missingDependencyError struct {
 	hints   []ports.InstallSuggestion
 }
 
+type commandReview struct {
+	editedCommand string
+	cancelled     bool
+}
+
 func (e missingDependencyError) Error() string {
 	return e.message
 }
@@ -148,7 +155,7 @@ func (s *Service) Convert(ctx context.Context, req ConvertRequest) (RunReport, e
 	defer s.progress.Finish()
 	for i, input := range req.Inputs {
 		index := i + 1
-		job, err := s.buildJob(input, req)
+		job, err := s.buildJob(ctx, input, req)
 		if err != nil {
 			s.progress.JobFailed(index, len(req.Inputs), domain.ConvertJob{InputPath: input}, "", err)
 			report.Items = append(report.Items, jobReportFromError(input, domain.Format(""), domain.Format(""), "", err, nil))
@@ -166,8 +173,35 @@ func (s *Service) Convert(ctx context.Context, req ConvertRequest) (RunReport, e
 			continue
 		}
 
+		review, err := s.reviewCommand(ctx, converter, job)
+		if err != nil {
+			return report, err
+		}
+		if review.cancelled {
+			s.progress.JobSkipped(index, len(req.Inputs), job.InputPath, job.OutputPath, "cancelled")
+			report.Items = append(report.Items, JobReport{
+				InputPath:    job.InputPath,
+				OutputPath:   job.OutputPath,
+				InputFormat:  job.InputFormat,
+				OutputFormat: job.OutputFormat,
+				Backend:      converter.ID(),
+				Status:       StatusSkipped,
+				Message:      "cancelled",
+			})
+			continue
+		}
+
 		s.progress.JobStart(index, len(req.Inputs), job, converter.ID())
-		result, err := converter.Convert(ctx, job)
+		var result domain.ConversionResult
+		if review.editedCommand != "" {
+			if override, ok := converter.(ports.CommandOverrideConverter); ok {
+				result, err = override.ConvertWithCommand(ctx, job, review.editedCommand)
+			} else {
+				result, err = s.runEditedCommand(ctx, review.editedCommand, job, converter.ID())
+			}
+		} else {
+			result, err = converter.Convert(ctx, job)
+		}
 		if err != nil {
 			hints := s.installHintsFromError(err)
 			s.progress.JobFailed(index, len(req.Inputs), job, converter.ID(), err)
@@ -198,6 +232,53 @@ func (s *Service) Convert(ctx context.Context, req ConvertRequest) (RunReport, e
 	}
 
 	return report, nil
+}
+
+func (s *Service) reviewCommand(ctx context.Context, converter ports.Converter, job domain.ConvertJob) (commandReview, error) {
+	if s.prompt == nil {
+		return commandReview{}, nil
+	}
+
+	review := ports.CommandReview{Backend: converter.ID(), Message: "internal converter; no external command"}
+	if previewer, ok := converter.(ports.CommandPreviewer); ok {
+		preview := previewer.PreviewCommands(job)
+		if len(preview.Commands) > 0 {
+			review.Commands = preview.Commands
+			review.Editable = preview.Editable
+			review.EditCommand = editableCommandLine(preview)
+		}
+	}
+
+	action, editedCommand, err := s.prompt.ConfirmCommand(ctx, review)
+	if err != nil {
+		return commandReview{}, err
+	}
+	switch action {
+	case ports.CommandReviewProceed:
+		return commandReview{}, nil
+	case ports.CommandReviewEdit:
+		editedCommand = strings.TrimSpace(editedCommand)
+		if editedCommand == "" {
+			return commandReview{}, fmt.Errorf("%w: command is required", domain.ErrInvalidJob)
+		}
+		return commandReview{editedCommand: editedCommand}, nil
+	case ports.CommandReviewCancel:
+		return commandReview{cancelled: true}, nil
+	default:
+		return commandReview{}, fmt.Errorf("%w: unknown command review action: %s", domain.ErrInvalidJob, action)
+	}
+}
+
+func (s *Service) runEditedCommand(ctx context.Context, command string, job domain.ConvertJob, backend string) (domain.ConversionResult, error) {
+	if s.runner == nil {
+		return domain.ConversionResult{}, errors.New("command runner is required")
+	}
+	shellCommand := shellCommand(command)
+	result, err := s.runner.Run(ctx, shellCommand)
+	if err != nil {
+		return domain.ConversionResult{}, commandStringError(command, result, err)
+	}
+	return domain.ConversionResult{Job: job, Backend: backend, OutputPath: job.OutputPath}, nil
 }
 
 func (s *Service) Interactive(ctx context.Context, req InteractiveRequest) (RunReport, error) {
@@ -352,7 +433,7 @@ func (s *Service) BuildJobs(req ConvertRequest) ([]domain.ConvertJob, error) {
 
 	jobs := make([]domain.ConvertJob, 0, len(req.Inputs))
 	for _, input := range req.Inputs {
-		job, err := s.buildJob(input, req)
+		job, err := s.buildJob(context.Background(), input, req)
 		if err != nil {
 			return nil, err
 		}
@@ -466,7 +547,7 @@ func (s *Service) Converters() []ports.Converter {
 	return append([]ports.Converter(nil), s.converters...)
 }
 
-func (s *Service) buildJob(input string, req ConvertRequest) (domain.ConvertJob, error) {
+func (s *Service) buildJob(ctx context.Context, input string, req ConvertRequest) (domain.ConvertJob, error) {
 	inputFormat, err := s.detectInputFormat(input, req.InputFormat)
 	if err != nil {
 		return domain.ConvertJob{}, err
@@ -503,7 +584,8 @@ func (s *Service) buildJob(input string, req ConvertRequest) (domain.ConvertJob,
 		outputPath = outputPathFor(input, inputFormat, outputFormat, outputDir, options)
 	}
 
-	if err := s.validateOutput(input, outputPath, req.Overwrite); err != nil {
+	outputPath, err = s.resolveOutputPath(ctx, input, outputPath, req.Overwrite)
+	if err != nil {
 		return domain.ConvertJob{}, err
 	}
 	if outputFormat != domain.FormatDir {
@@ -567,7 +649,46 @@ func (s *Service) detectOutputFormat(output string) (domain.Format, error) {
 	return domain.FormatFromPath(output)
 }
 
-func (s *Service) validateOutput(input string, output string, overwrite bool) error {
+func (s *Service) resolveOutputPath(ctx context.Context, input string, output string, overwrite bool) (string, error) {
+	if err := s.validateOutputIdentity(input, output); err != nil {
+		return "", err
+	}
+	if overwrite {
+		return output, nil
+	}
+
+	current := output
+	for {
+		exists, err := s.fs.Exists(current)
+		if err != nil {
+			return "", err
+		}
+		if !exists {
+			return current, nil
+		}
+		if s.prompt == nil {
+			return "", outputExistsError(current)
+		}
+
+		next, err := s.prompt.AskOutputPath(ctx, current)
+		if err != nil {
+			return "", err
+		}
+		next = strings.TrimSpace(next)
+		if next == "" {
+			return "", fmt.Errorf("%w: output path is required", domain.ErrInvalidJob)
+		}
+		if next == current {
+			return "", outputExistsError(current)
+		}
+		if err := s.validateOutputIdentity(input, next); err != nil {
+			return "", err
+		}
+		current = next
+	}
+}
+
+func (s *Service) validateOutputIdentity(input string, output string) error {
 	inputAbs, err := s.fs.Abs(input)
 	if err != nil {
 		return err
@@ -579,16 +700,11 @@ func (s *Service) validateOutput(input string, output string, overwrite bool) er
 	if inputAbs == outputAbs {
 		return fmt.Errorf("%w: input and output path are the same: %s", domain.ErrInvalidJob, output)
 	}
-
-	exists, err := s.fs.Exists(output)
-	if err != nil {
-		return err
-	}
-	if exists && !overwrite {
-		return fmt.Errorf("%w: output already exists: %s", domain.ErrInvalidJob, output)
-	}
-
 	return nil
+}
+
+func outputExistsError(output string) error {
+	return fmt.Errorf("%w: output already exists: %s", domain.ErrInvalidJob, output)
 }
 
 func (s *Service) pickConverter(input domain.Format, output domain.Format, options domain.ConvertOptions) (ports.Converter, error) {
@@ -778,6 +894,58 @@ func outputPathFor(input string, inputFormat domain.Format, outputFormat domain.
 	}
 
 	return filepath.Join(dir, base+"."+outputFormat.Extension())
+}
+
+func editableCommandLine(preview ports.CommandPreview) string {
+	if len(preview.Commands) == 0 {
+		return ""
+	}
+	index := preview.EditableCommand
+	if index < 0 || index >= len(preview.Commands) {
+		index = 0
+	}
+	return commandLine(preview.Commands[index])
+}
+
+func commandLine(command ports.Command) string {
+	parts := []string{command.Name}
+	parts = append(parts, command.Args...)
+	for i, part := range parts {
+		parts[i] = shellQuote(part)
+	}
+	line := strings.Join(parts, " ")
+	if command.Dir != "" {
+		return "cd " + shellQuote(command.Dir) + " && " + line
+	}
+	return line
+}
+
+func commandStringError(command string, result ports.CommandResult, err error) error {
+	if err == nil {
+		return nil
+	}
+	message := fmt.Sprintf("command: %s", command)
+	if result.Stderr != "" {
+		return fmt.Errorf("%s: %w: %s", message, err, result.Stderr)
+	}
+	if result.Stdout != "" {
+		return fmt.Errorf("%s: %w: %s", message, err, result.Stdout)
+	}
+	return fmt.Errorf("%s: %w", message, err)
+}
+
+func shellCommand(command string) ports.Command {
+	if runtime.GOOS == "windows" {
+		return ports.Command{Name: "cmd", Args: []string{"/C", command}}
+	}
+	return ports.Command{Name: "sh", Args: []string{"-c", command}}
+}
+
+func shellQuote(value string) string {
+	if value == "" || strings.ContainsAny(value, " \t\n\"'\\$`;&|<>!*?[]{}()") {
+		return strconv.Quote(value)
+	}
+	return value
 }
 
 func baseNameWithoutFormat(path string, format domain.Format) string {

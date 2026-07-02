@@ -36,6 +36,36 @@ type DependencyStatusAware interface {
 	DependencyChecks() []DependencyCheck
 }
 
+type CommandPreview struct {
+	Commands        []Command
+	Editable        bool
+	EditableCommand int
+}
+
+type CommandPreviewer interface {
+	PreviewCommands(job domain.ConvertJob) CommandPreview
+}
+
+type CommandReviewAction string
+
+const (
+	CommandReviewProceed CommandReviewAction = "proceed"
+	CommandReviewEdit    CommandReviewAction = "edit"
+	CommandReviewCancel  CommandReviewAction = "cancel"
+)
+
+type CommandReview struct {
+	Backend     string
+	Commands    []Command
+	Message     string
+	Editable    bool
+	EditCommand string
+}
+
+type CommandOverrideConverter interface {
+	ConvertWithCommand(ctx context.Context, job domain.ConvertJob, command string) (domain.ConversionResult, error)
+}
+
 type FormatChoice struct {
 	Format    domain.Format
 	Available bool
@@ -70,6 +100,8 @@ type Prompt interface {
 	SelectArchiveAction(ctx context.Context, file domain.FileRef) (domain.ArchiveAction, error)
 	SelectSameFormatAction(ctx context.Context, format domain.Format) (domain.TransformAction, error)
 	ConfirmOption(ctx context.Context, title string, description string, defaultValue bool) (bool, error)
+	ConfirmCommand(ctx context.Context, review CommandReview) (CommandReviewAction, string, error)
+	AskOutputPath(ctx context.Context, currentPath string) (string, error)
 	AskOutputSize(ctx context.Context, defaultSize string) (string, error)
 	AskResize(ctx context.Context) (string, error)
 	AskQuality(ctx context.Context, defaultQuality int) (int, error)

@@ -71,12 +71,36 @@ func (c *FFmpeg) CanConvert(input domain.Format, output domain.Format) bool {
 }
 
 func (c *FFmpeg) Convert(ctx context.Context, job domain.ConvertJob) (domain.ConversionResult, error) {
+	return runSimple(ctx, c.runner, "ffmpeg", c.args(job), job, c.ID())
+}
+
+func (c *FFmpeg) PreviewCommands(job domain.ConvertJob) ports.CommandPreview {
+	return previewCommand("ffmpeg", c.args(job))
+}
+
+func (c *FFmpeg) args(job domain.ConvertJob) []string {
 	args := []string{"-hide_banner", "-loglevel", "error"}
 	if job.Options.Overwrite {
 		args = append(args, "-y")
 	} else {
 		args = append(args, "-n")
 	}
-	args = append(args, "-i", job.InputPath, job.OutputPath)
-	return runSimple(ctx, c.runner, "ffmpeg", args, job, c.ID())
+	args = append(args, "-i", job.InputPath)
+	if ffmpegNeedsEvenVideo(job.InputFormat, job.OutputFormat) {
+		args = append(args, "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-pix_fmt", "yuv420p")
+	}
+	args = append(args, job.OutputPath)
+	return args
+}
+
+func ffmpegNeedsEvenVideo(input domain.Format, output domain.Format) bool {
+	if input.IsAudio() {
+		return false
+	}
+	switch output {
+	case domain.FormatMP4, domain.FormatMOV, domain.FormatMKV, domain.FormatM4V:
+		return true
+	default:
+		return false
+	}
 }

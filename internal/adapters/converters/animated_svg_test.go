@@ -29,3 +29,49 @@ func TestAnimatedSVGCapabilitiesOnlyForAnimatedSVG(t *testing.T) {
 		t.Fatalf("animated SVG should expose video/animation outputs: %#v", caps)
 	}
 }
+
+func TestSVGAnimationDurationUsesSMILTiming(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "duration.svg")
+	if err := os.WriteFile(path, []byte(`<svg><circle><animate attributeName="r" begin="1s" dur="2s" repeatCount="3"/></circle></svg>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := svgAnimationDuration(path, 3)
+	if got != 7 {
+		t.Fatalf("expected duration 7, got %v", got)
+	}
+}
+
+func TestAnimatedSVGPreviewUsesEvenDimensionsForH264Outputs(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "odd.svg")
+	if err := os.WriteFile(path, []byte(`<svg width="1138" height="495"><circle><animate attributeName="r" dur="1s"/></circle></svg>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	preview := NewAnimatedSVG(nil).PreviewCommands(domain.ConvertJob{
+		InputPath:    path,
+		OutputPath:   filepath.Join(dir, "odd.mp4"),
+		InputFormat:  domain.FormatSVG,
+		OutputFormat: domain.FormatMP4,
+	})
+	if !preview.Editable || preview.EditableCommand != 1 {
+		t.Fatalf("expected editable ffmpeg command, got %#v", preview)
+	}
+	if len(preview.Commands) != 2 {
+		t.Fatalf("expected browser and ffmpeg previews, got %#v", preview.Commands)
+	}
+	if !containsString(preview.Commands[0].Args, "--window-size=1138,496") {
+		t.Fatalf("expected even window size, got %#v", preview.Commands[0].Args)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}

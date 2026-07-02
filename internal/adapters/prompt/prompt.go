@@ -3,7 +3,6 @@ package promptadapter
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,12 +11,11 @@ import (
 	"strconv"
 	"strings"
 
-	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/shellcell/convert/internal/domain"
 	"github.com/shellcell/convert/internal/ports"
+	"github.com/shellcell/convert/internal/theme"
 	"golang.org/x/term"
 )
 
@@ -26,23 +24,46 @@ type Prompt struct {
 	in     *bufio.Reader
 	out    io.Writer
 
-	titleStyle  lipgloss.Style
-	numberStyle lipgloss.Style
-	hintStyle   lipgloss.Style
-	badgeStyle  lipgloss.Style
-	promptStyle lipgloss.Style
+	titleStyle                  lipgloss.Style
+	numberStyle                 lipgloss.Style
+	hintStyle                   lipgloss.Style
+	flagStyle                   lipgloss.Style
+	badgeStyle                  lipgloss.Style
+	promptStyle                 lipgloss.Style
+	selectedStyle               lipgloss.Style
+	dimStyle                    lipgloss.Style
+	errorStyle                  lipgloss.Style
+	unavailableStyle            lipgloss.Style
+	categoryStyles              map[string]lipgloss.Style
+	categoryFaintStyles         map[string]lipgloss.Style
+	categorySelectedStyles      map[string]lipgloss.Style
+	categorySelectedFaintStyles map[string]lipgloss.Style
 }
 
-func New(in io.Reader, out io.Writer) *Prompt {
+func New(in io.Reader, out io.Writer, palettes ...theme.Palette) *Prompt {
+	palette := theme.Default()
+	if len(palettes) > 0 {
+		palette = palettes[0]
+	}
+	categoryStyles, categoryFaintStyles, categorySelectedStyles, categorySelectedFaintStyles := categoryStyleMaps(palette)
 	return &Prompt{
-		source:      in,
-		in:          bufio.NewReader(in),
-		out:         out,
-		titleStyle:  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("205")),
-		numberStyle: lipgloss.NewStyle().Foreground(lipgloss.Color("39")),
-		hintStyle:   lipgloss.NewStyle().Foreground(lipgloss.Color("245")),
-		badgeStyle:  lipgloss.NewStyle().Foreground(lipgloss.Color("230")).Background(lipgloss.Color("62")).Padding(0, 1),
-		promptStyle: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("86")),
+		source:                      in,
+		in:                          bufio.NewReader(in),
+		out:                         out,
+		titleStyle:                  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(palette.Title)),
+		numberStyle:                 lipgloss.NewStyle().Foreground(lipgloss.Color(palette.Number)),
+		hintStyle:                   lipgloss.NewStyle().Foreground(lipgloss.Color(palette.Hint)),
+		flagStyle:                   lipgloss.NewStyle().Foreground(lipgloss.Color(palette.Flag)),
+		badgeStyle:                  lipgloss.NewStyle().Foreground(lipgloss.Color(palette.BadgeForeground)).Background(lipgloss.Color(palette.BadgeBackground)).Padding(0, 1),
+		promptStyle:                 lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(palette.Prompt)),
+		selectedStyle:               lipgloss.NewStyle().Foreground(lipgloss.Color(palette.Selected)).Bold(true),
+		dimStyle:                    lipgloss.NewStyle().Foreground(lipgloss.Color(palette.Dim)),
+		errorStyle:                  lipgloss.NewStyle().Foreground(lipgloss.Color(palette.Error)),
+		unavailableStyle:            lipgloss.NewStyle().Foreground(lipgloss.Color(palette.Unavailable)),
+		categoryStyles:              categoryStyles,
+		categoryFaintStyles:         categoryFaintStyles,
+		categorySelectedStyles:      categorySelectedStyles,
+		categorySelectedFaintStyles: categorySelectedFaintStyles,
 	}
 }
 
@@ -70,20 +91,10 @@ func (p *Prompt) SelectFormat(ctx context.Context, choices []ports.FormatChoice)
 
 func (p *Prompt) SelectOutputLocation(ctx context.Context, currentDir string) (ports.OutputLocation, error) {
 	if p.hasTerminal() {
-		var selected ports.OutputLocation
-		field := huh.NewSelect[ports.OutputLocation]().
-			Title("Save outputs").
-			Description("Current directory: "+currentDir).
-			Options(
-				huh.NewOption("Current directory", ports.OutputLocationCurrent),
-				huh.NewOption("Beside each source", ports.OutputLocationSource),
-			).
-			Value(&selected)
-
-		if err := p.runField(ctx, field); err != nil {
-			return "", err
-		}
-		return selected, nil
+		return selectValueTerminal(ctx, p, "Save outputs", "Current directory: "+currentDir, []selectPromptOption[ports.OutputLocation]{
+			{Label: "Current directory", Value: ports.OutputLocationCurrent},
+			{Label: "Beside each source", Value: ports.OutputLocationSource},
+		})
 	}
 
 	fmt.Fprintln(p.out, p.titleStyle.Render("Save outputs"))
@@ -103,21 +114,11 @@ func (p *Prompt) SelectOutputLocation(ctx context.Context, currentDir string) (p
 
 func (p *Prompt) SelectArchiveAction(ctx context.Context, file domain.FileRef) (domain.ArchiveAction, error) {
 	if p.hasTerminal() {
-		var selected domain.ArchiveAction
-		field := huh.NewSelect[domain.ArchiveAction]().
-			Title("Archive detected").
-			Description(file.Name+" ["+file.Format.String()+"]").
-			Options(
-				huh.NewOption("Extract archive", domain.ArchiveActionExtract),
-				huh.NewOption("Choose output format", domain.ArchiveActionConvert),
-				huh.NewOption("Cancel", domain.ArchiveActionCancel),
-			).
-			Value(&selected)
-
-		if err := p.runField(ctx, field); err != nil {
-			return "", err
-		}
-		return selected, nil
+		return selectValueTerminal(ctx, p, "Archive detected", file.Name+" ["+file.Format.String()+"]", []selectPromptOption[domain.ArchiveAction]{
+			{Label: "Extract archive", Value: domain.ArchiveActionExtract},
+			{Label: "Choose output format", Value: domain.ArchiveActionConvert},
+			{Label: "Cancel", Value: domain.ArchiveActionCancel},
+		})
 	}
 
 	fmt.Fprintln(p.out, p.titleStyle.Render("Archive detected"))
@@ -136,21 +137,11 @@ func (p *Prompt) SelectArchiveAction(ctx context.Context, file domain.FileRef) (
 
 func (p *Prompt) SelectSameFormatAction(ctx context.Context, format domain.Format) (domain.TransformAction, error) {
 	if p.hasTerminal() {
-		var selected domain.TransformAction
-		field := huh.NewSelect[domain.TransformAction]().
-			Title("Input and output format match").
-			Description("Choose what to do with "+format.String()+" files.").
-			Options(
-				huh.NewOption("Compress", domain.ActionCompress),
-				huh.NewOption("Resize", domain.ActionResize),
-				huh.NewOption("Convert/copy", domain.ActionConvert),
-			).
-			Value(&selected)
-
-		if err := p.runField(ctx, field); err != nil {
-			return "", err
-		}
-		return selected, nil
+		return selectValueTerminal(ctx, p, "Input and output format match", "Choose what to do with "+format.String()+" files.", []selectPromptOption[domain.TransformAction]{
+			{Label: "Compress", Value: domain.ActionCompress},
+			{Label: "Resize", Value: domain.ActionResize},
+			{Label: "Convert/copy", Value: domain.ActionConvert},
+		})
 	}
 
 	fmt.Fprintln(p.out, p.titleStyle.Render("Input and output format match"))
@@ -169,26 +160,11 @@ func (p *Prompt) SelectSameFormatAction(ctx context.Context, format domain.Forma
 
 func (p *Prompt) ConfirmOption(ctx context.Context, title string, description string, defaultValue bool) (bool, error) {
 	if p.hasTerminal() {
-		selected := defaultValue
-		options := []huh.Option[bool]{
-			huh.NewOption("No", false),
-			huh.NewOption("Yes", true),
-		}
+		options := []selectPromptOption[bool]{{Label: "No", Value: false}, {Label: "Yes", Value: true}}
 		if defaultValue {
-			options = []huh.Option[bool]{
-				huh.NewOption("Yes", true),
-				huh.NewOption("No", false),
-			}
+			options = []selectPromptOption[bool]{{Label: "Yes", Value: true}, {Label: "No", Value: false}}
 		}
-		field := huh.NewSelect[bool]().
-			Title(title).
-			Description(description).
-			Options(options...).Value(&selected)
-
-		if err := p.runField(ctx, field); err != nil {
-			return false, err
-		}
-		return selected, nil
+		return selectValueTerminal(ctx, p, title, description, options)
 	}
 
 	fmt.Fprintln(p.out, p.titleStyle.Render(title))
@@ -213,16 +189,126 @@ func (p *Prompt) ConfirmOption(ctx context.Context, title string, description st
 	return index == 1, nil
 }
 
+func (p *Prompt) ConfirmCommand(ctx context.Context, review ports.CommandReview) (ports.CommandReviewAction, string, error) {
+	if !p.hasTerminal() {
+		return ports.CommandReviewProceed, review.EditCommand, nil
+	}
+
+	options := []selectPromptOption[ports.CommandReviewAction]{{Label: "Proceed", Value: ports.CommandReviewProceed}}
+	if review.Editable {
+		options = append(options, selectPromptOption[ports.CommandReviewAction]{Label: "Edit command", Value: ports.CommandReviewEdit})
+	}
+	options = append(options, selectPromptOption[ports.CommandReviewAction]{Label: "Cancel", Value: ports.CommandReviewCancel})
+
+	command := p.commandReviewDescription(review)
+	selected, err := selectValueTerminal(ctx, p, "Confirm conversion", "Backend: "+review.Backend+"\nCommand:\n"+command, options)
+	if err != nil {
+		return "", "", err
+	}
+	if selected != ports.CommandReviewEdit {
+		return selected, review.EditCommand, nil
+	}
+
+	edited := strings.TrimSpace(review.EditCommand)
+	edited, err = p.inputTerminal(ctx, inputPromptConfig{
+		Title:       "Edit command",
+		Description: "The edited command runs through the shell for this job.",
+		Value:       edited,
+		Validate: func(value string) error {
+			if strings.TrimSpace(value) == "" {
+				return fmt.Errorf("command is required")
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		return "", "", err
+	}
+	return ports.CommandReviewEdit, strings.TrimSpace(edited), nil
+}
+
+func (p *Prompt) AskOutputPath(ctx context.Context, currentPath string) (string, error) {
+	if !p.hasTerminal() {
+		return currentPath, nil
+	}
+
+	value := currentPath
+	value, err := p.inputTerminal(ctx, inputPromptConfig{
+		Title:       "Output already exists",
+		Description: "Enter a different output path.",
+		Value:       value,
+		Validate: func(value string) error {
+			value = strings.TrimSpace(value)
+			if value == "" {
+				return fmt.Errorf("output path is required")
+			}
+			if value == currentPath {
+				return fmt.Errorf("enter a different output path")
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(value), nil
+}
+
+func (p *Prompt) commandReviewDescription(review ports.CommandReview) string {
+	if len(review.Commands) == 0 {
+		return review.Message
+	}
+
+	lines := make([]string, 0, len(review.Commands))
+	for _, command := range review.Commands {
+		lines = append(lines, p.formatCommand(command))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (p *Prompt) formatCommand(command ports.Command) string {
+	var b strings.Builder
+	if command.Dir != "" {
+		b.WriteString("cd ")
+		b.WriteString(promptShellQuote(command.Dir))
+		b.WriteString(" &&\n")
+	}
+	b.WriteString(promptShellQuote(command.Name))
+	for i := 0; i < len(command.Args); {
+		arg := command.Args[i]
+		b.WriteString("\n  ")
+		if strings.HasPrefix(arg, "-") {
+			b.WriteString(p.flagStyle.Render(promptShellQuote(arg)))
+			i++
+			for i < len(command.Args) && !strings.HasPrefix(command.Args[i], "-") {
+				b.WriteString(" ")
+				b.WriteString(promptShellQuote(command.Args[i]))
+				i++
+			}
+			continue
+		}
+		b.WriteString(promptShellQuote(arg))
+		i++
+	}
+	return b.String()
+}
+
+func promptShellQuote(value string) string {
+	if value == "" || strings.ContainsAny(value, " \t\n\"'\\$`;&|<>!*?[]{}()") {
+		return strconv.Quote(value)
+	}
+	return value
+}
+
 func (p *Prompt) AskOutputSize(ctx context.Context, defaultSize string) (string, error) {
 	if p.hasTerminal() {
-		value := defaultSize
-		field := huh.NewInput().
-			Title("Output size").
-			Description("Examples: 1024x1024, 1280x720, 800x, x600. Press enter to use the default.").
-			Placeholder(defaultSize).
-			Value(&value)
-
-		if err := p.runField(ctx, field); err != nil {
+		value, err := p.inputTerminal(ctx, inputPromptConfig{
+			Title:       "Output size",
+			Description: "Examples: 1024x1024, 1280x720, 800x, x600. Press enter to use the default.",
+			Placeholder: defaultSize,
+			Value:       defaultSize,
+		})
+		if err != nil {
 			return "", err
 		}
 		if strings.TrimSpace(value) == "" {
@@ -245,20 +331,18 @@ func (p *Prompt) AskOutputSize(ctx context.Context, defaultSize string) (string,
 
 func (p *Prompt) AskResize(ctx context.Context) (string, error) {
 	if p.hasTerminal() {
-		var value string
-		field := huh.NewInput().
-			Title("Resize").
-			Description("Examples: 800x, x600, 1280x720, 50%").
-			Placeholder("800x").
-			Validate(func(value string) error {
+		value, err := p.inputTerminal(ctx, inputPromptConfig{
+			Title:       "Resize",
+			Description: "Examples: 800x, x600, 1280x720, 50%",
+			Placeholder: "800x",
+			Validate: func(value string) error {
 				if strings.TrimSpace(value) == "" {
 					return fmt.Errorf("resize value is required")
 				}
 				return nil
-			}).
-			Value(&value)
-
-		if err := p.runField(ctx, field); err != nil {
+			},
+		})
+		if err != nil {
 			return "", err
 		}
 		return strings.TrimSpace(value), nil
@@ -278,12 +362,12 @@ func (p *Prompt) AskResize(ctx context.Context) (string, error) {
 
 func (p *Prompt) AskQuality(ctx context.Context, defaultQuality int) (int, error) {
 	if p.hasTerminal() {
-		value := strconv.Itoa(defaultQuality)
-		field := huh.NewInput().
-			Title("Quality").
-			Description("Enter quality from 1 to 100.").
-			Placeholder(strconv.Itoa(defaultQuality)).
-			Validate(func(value string) error {
+		value, err := p.inputTerminal(ctx, inputPromptConfig{
+			Title:       "Quality",
+			Description: "Enter quality from 1 to 100.",
+			Placeholder: strconv.Itoa(defaultQuality),
+			Value:       strconv.Itoa(defaultQuality),
+			Validate: func(value string) error {
 				if strings.TrimSpace(value) == "" {
 					return nil
 				}
@@ -295,10 +379,9 @@ func (p *Prompt) AskQuality(ctx context.Context, defaultQuality int) (int, error
 					return fmt.Errorf("quality must be between 1 and 100")
 				}
 				return nil
-			}).
-			Value(&value)
-
-		if err := p.runField(ctx, field); err != nil {
+			},
+		})
+		if err != nil {
 			return 0, err
 		}
 		if strings.TrimSpace(value) == "" {
@@ -325,6 +408,290 @@ func (p *Prompt) AskQuality(ctx context.Context, defaultQuality int) (int, error
 		return 0, fmt.Errorf("quality must be between 1 and 100")
 	}
 	return quality, nil
+}
+
+type selectPromptOption[T comparable] struct {
+	Label string
+	Value T
+	Hint  string
+}
+
+func selectValueTerminal[T comparable](ctx context.Context, p *Prompt, title string, description string, options []selectPromptOption[T]) (T, error) {
+	var zero T
+	if len(options) == 0 {
+		return zero, fmt.Errorf("no options to select")
+	}
+	model := &selectPromptModel[T]{
+		title:         title,
+		description:   description,
+		options:       options,
+		height:        p.listHeight(6),
+		titleStyle:    p.titleStyle,
+		numberStyle:   p.numberStyle,
+		hintStyle:     p.hintStyle,
+		selectedStyle: p.selectedStyle,
+		errorStyle:    p.errorStyle,
+	}
+	program := tea.NewProgram(model, tea.WithContext(ctx), tea.WithInput(p.source), tea.WithOutput(p.out))
+	result, err := program.Run()
+	if err != nil {
+		return zero, err
+	}
+	finished, ok := result.(*selectPromptModel[T])
+	if !ok {
+		return zero, fmt.Errorf("unexpected prompt result")
+	}
+	if finished.aborted {
+		return zero, ports.ErrUserAborted
+	}
+	if !finished.submitted {
+		return zero, fmt.Errorf("select an option")
+	}
+	return finished.result, nil
+}
+
+type selectPromptModel[T comparable] struct {
+	title         string
+	description   string
+	options       []selectPromptOption[T]
+	cursor        int
+	offset        int
+	height        int
+	result        T
+	submitted     bool
+	aborted       bool
+	titleStyle    lipgloss.Style
+	numberStyle   lipgloss.Style
+	hintStyle     lipgloss.Style
+	selectedStyle lipgloss.Style
+	errorStyle    lipgloss.Style
+}
+
+func (m *selectPromptModel[T]) Init() tea.Cmd { return nil }
+
+func (m *selectPromptModel[T]) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.height = maxInt(3, msg.Height-6)
+		m.ensureCursorVisible()
+	case tea.KeyPressMsg:
+		switch msg.String() {
+		case "ctrl+c", "q":
+			m.aborted = true
+			return m, tea.Quit
+		case "up", "k":
+			m.move(-1)
+		case "down", "j":
+			m.move(1)
+		case "pgup", "pageup", "ctrl+up", "alt+up", "option+up", "ctrl+u":
+			m.move(-m.height)
+		case "pgdown", "pagedown", "ctrl+down", "alt+down", "option+down", "ctrl+d":
+			m.move(m.height)
+		case "home", "ctrl+a":
+			m.cursor = 0
+			m.ensureCursorVisible()
+		case "end", "G", "shift+g", "ctrl+e":
+			m.cursor = len(m.options) - 1
+			m.ensureCursorVisible()
+		case "enter", "space", "x":
+			m.result = m.options[m.cursor].Value
+			m.submitted = true
+			return m, tea.Quit
+		}
+	}
+	return m, nil
+}
+
+func (m *selectPromptModel[T]) View() tea.View {
+	var b strings.Builder
+	b.WriteString(m.titleStyle.Render(m.title))
+	b.WriteString("\n")
+	if m.description != "" {
+		b.WriteString(m.description)
+		b.WriteString("\n")
+	}
+	b.WriteString(m.hintStyle.Render("up/down moves, enter selects, q quits"))
+	b.WriteString("\n")
+	end := minInt(len(m.options), m.offset+m.height)
+	for i := m.offset; i < end; i++ {
+		option := m.options[i]
+		cursor := "  "
+		label := option.Label
+		if i == m.cursor {
+			cursor = m.numberStyle.Render("› ")
+			label = m.selectedStyle.Render(label)
+		}
+		b.WriteString(cursor)
+		b.WriteString(label)
+		if option.Hint != "" {
+			b.WriteString(" ")
+			b.WriteString(m.hintStyle.Render(option.Hint))
+		}
+		b.WriteString("\n")
+	}
+	if len(m.options) > m.height {
+		b.WriteString(m.hintStyle.Render(fmt.Sprintf("Showing %d-%d of %d", m.offset+1, end, len(m.options))))
+		b.WriteString("\n")
+	}
+	return tea.NewView(b.String())
+}
+
+func (m *selectPromptModel[T]) move(delta int) {
+	m.cursor = clampInt(m.cursor+delta, 0, len(m.options)-1)
+	m.ensureCursorVisible()
+}
+
+func (m *selectPromptModel[T]) ensureCursorVisible() {
+	if m.cursor < m.offset {
+		m.offset = m.cursor
+	}
+	if m.cursor >= m.offset+m.height {
+		m.offset = m.cursor - m.height + 1
+	}
+	maxOffset := maxInt(0, len(m.options)-m.height)
+	m.offset = clampInt(m.offset, 0, maxOffset)
+}
+
+type inputPromptConfig struct {
+	Title       string
+	Description string
+	Placeholder string
+	Value       string
+	Validate    func(string) error
+}
+
+func (p *Prompt) inputTerminal(ctx context.Context, config inputPromptConfig) (string, error) {
+	model := &inputPromptModel{
+		title:       config.Title,
+		description: config.Description,
+		placeholder: config.Placeholder,
+		value:       []rune(config.Value),
+		cursor:      len([]rune(config.Value)),
+		validate:    config.Validate,
+		titleStyle:  p.titleStyle,
+		hintStyle:   p.hintStyle,
+		promptStyle: p.promptStyle,
+		errorStyle:  p.errorStyle,
+	}
+	program := tea.NewProgram(model, tea.WithContext(ctx), tea.WithInput(p.source), tea.WithOutput(p.out))
+	result, err := program.Run()
+	if err != nil {
+		return "", err
+	}
+	finished, ok := result.(*inputPromptModel)
+	if !ok {
+		return "", fmt.Errorf("unexpected input result")
+	}
+	if finished.aborted {
+		return "", ports.ErrUserAborted
+	}
+	if !finished.submitted {
+		return "", fmt.Errorf("enter a value")
+	}
+	return string(finished.value), nil
+}
+
+type inputPromptModel struct {
+	title       string
+	description string
+	placeholder string
+	value       []rune
+	cursor      int
+	err         string
+	validate    func(string) error
+	submitted   bool
+	aborted     bool
+	titleStyle  lipgloss.Style
+	hintStyle   lipgloss.Style
+	promptStyle lipgloss.Style
+	errorStyle  lipgloss.Style
+}
+
+func (m *inputPromptModel) Init() tea.Cmd { return nil }
+
+func (m *inputPromptModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyPressMsg:
+		switch msg.String() {
+		case "ctrl+c":
+			m.aborted = true
+			return m, tea.Quit
+		case "enter":
+			value := string(m.value)
+			if m.validate != nil {
+				if err := m.validate(value); err != nil {
+					m.err = err.Error()
+					return m, nil
+				}
+			}
+			m.submitted = true
+			return m, tea.Quit
+		case "backspace", "ctrl+h":
+			if m.cursor > 0 {
+				m.value = append(m.value[:m.cursor-1], m.value[m.cursor:]...)
+				m.cursor--
+				m.err = ""
+			}
+		case "delete", "ctrl+d":
+			if m.cursor < len(m.value) {
+				m.value = append(m.value[:m.cursor], m.value[m.cursor+1:]...)
+				m.err = ""
+			}
+		case "left", "ctrl+b":
+			m.cursor = maxInt(0, m.cursor-1)
+		case "right", "ctrl+f":
+			m.cursor = minInt(len(m.value), m.cursor+1)
+		case "home", "ctrl+a":
+			m.cursor = 0
+		case "end", "ctrl+e":
+			m.cursor = len(m.value)
+		default:
+			if text := msg.Key().Text; text != "" {
+				runes := []rune(text)
+				m.value = append(m.value[:m.cursor], append(runes, m.value[m.cursor:]...)...)
+				m.cursor += len(runes)
+				m.err = ""
+			}
+		}
+	}
+	return m, nil
+}
+
+func (m *inputPromptModel) View() tea.View {
+	var b strings.Builder
+	b.WriteString(m.titleStyle.Render(m.title))
+	b.WriteString("\n")
+	if m.description != "" {
+		b.WriteString(m.hintStyle.Render(m.description))
+		b.WriteString("\n")
+	}
+	b.WriteString(m.promptStyle.Render("> "))
+	b.WriteString(m.renderValue())
+	b.WriteString("\n")
+	if m.err != "" {
+		b.WriteString(m.errorStyle.Render(m.err))
+		b.WriteString("\n")
+	}
+	b.WriteString(m.hintStyle.Render("enter accepts, ctrl+c quits"))
+	b.WriteString("\n")
+	return tea.NewView(b.String())
+}
+
+func (m *inputPromptModel) renderValue() string {
+	if len(m.value) == 0 {
+		return m.hintStyle.Render(m.placeholder) + m.promptStyle.Render(" ")
+	}
+	var b strings.Builder
+	for i, r := range m.value {
+		if i == m.cursor {
+			b.WriteString(m.promptStyle.Render("▏"))
+		}
+		b.WriteRune(r)
+	}
+	if m.cursor == len(m.value) {
+		b.WriteString(m.promptStyle.Render("▏"))
+	}
+	return b.String()
 }
 
 func (p *Prompt) selectFilesTerminal(ctx context.Context, files []domain.FileRef) ([]domain.FileRef, error) {
@@ -369,8 +736,11 @@ func (p *Prompt) selectFormatTerminal(ctx context.Context, choices []ports.Forma
 }
 
 type filePickerEntry struct {
-	file   domain.FileRef
-	parent bool
+	file        domain.FileRef
+	parent      bool
+	label       string
+	searchText  string
+	formatLabel string
 }
 
 type filePickerPosition struct {
@@ -380,51 +750,55 @@ type filePickerPosition struct {
 }
 
 type filePickerModel struct {
-	in            io.Reader
-	out           io.Writer
-	startDir      string
-	currentDir    string
-	entries       []filePickerEntry
-	selected      map[string]domain.FileRef
-	positions     map[string]filePickerPosition
-	cursor        int
-	offset        int
-	height        int
-	width         int
-	filter        string
-	filtering     bool
-	pendingG      bool
-	err           string
-	aborted       bool
-	result        []domain.FileRef
-	titleStyle    lipgloss.Style
-	numberStyle   lipgloss.Style
-	hintStyle     lipgloss.Style
-	badgeStyle    lipgloss.Style
-	promptStyle   lipgloss.Style
-	selectedStyle lipgloss.Style
-	dimStyle      lipgloss.Style
+	in             io.Reader
+	out            io.Writer
+	startDir       string
+	currentDir     string
+	entries        []filePickerEntry
+	selected       map[string]domain.FileRef
+	positions      map[string]filePickerPosition
+	cursor         int
+	offset         int
+	height         int
+	width          int
+	filter         string
+	filtering      bool
+	pendingG       bool
+	err            string
+	aborted        bool
+	result         []domain.FileRef
+	titleStyle     lipgloss.Style
+	numberStyle    lipgloss.Style
+	hintStyle      lipgloss.Style
+	badgeStyle     lipgloss.Style
+	promptStyle    lipgloss.Style
+	selectedStyle  lipgloss.Style
+	dimStyle       lipgloss.Style
+	errorStyle     lipgloss.Style
+	categoryStyles map[string]lipgloss.Style
 }
 
 func newFilePickerModel(p *Prompt, root string, files []domain.FileRef) *filePickerModel {
 	model := &filePickerModel{
-		in:            p.source,
-		out:           p.out,
-		startDir:      filepath.Clean(root),
-		currentDir:    filepath.Clean(root),
-		selected:      map[string]domain.FileRef{},
-		positions:     map[string]filePickerPosition{},
-		height:        p.listHeight(8),
-		width:         p.terminalWidth(90),
-		titleStyle:    p.titleStyle,
-		numberStyle:   p.numberStyle,
-		hintStyle:     p.hintStyle,
-		badgeStyle:    p.badgeStyle,
-		promptStyle:   p.promptStyle,
-		selectedStyle: lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Bold(true),
-		dimStyle:      lipgloss.NewStyle().Foreground(lipgloss.Color("245")),
+		in:             p.source,
+		out:            p.out,
+		startDir:       filepath.Clean(root),
+		currentDir:     filepath.Clean(root),
+		selected:       map[string]domain.FileRef{},
+		positions:      map[string]filePickerPosition{},
+		height:         p.listHeight(8),
+		width:          p.terminalWidth(90),
+		titleStyle:     p.titleStyle,
+		numberStyle:    p.numberStyle,
+		hintStyle:      p.hintStyle,
+		badgeStyle:     p.badgeStyle,
+		promptStyle:    p.promptStyle,
+		selectedStyle:  p.selectedStyle,
+		dimStyle:       p.dimStyle,
+		errorStyle:     p.errorStyle,
+		categoryStyles: p.categoryStyles,
 	}
-	model.entries = entriesFromFiles(files, false)
+	model.entries = entriesFromFiles(files, false, p.categoryStyles)
 	return model
 }
 
@@ -541,14 +915,10 @@ func (m *filePickerModel) View() tea.View {
 			if _, ok := m.selected[entry.file.Path]; ok {
 				mark = m.selectedStyle.Render("[x]")
 			}
-			label := entry.file.Name
-			if entry.file.Format == domain.FormatDir && !strings.HasSuffix(label, "/") {
-				label += "/"
-			}
 			if entry.parent {
 				mark = "   "
 			}
-			b.WriteString(fmt.Sprintf("%s%s %s %s\n", cursor, mark, formatLabel(entry.file.Format), label))
+			b.WriteString(fmt.Sprintf("%s%s %s %s\n", cursor, mark, entry.formatLabel, entry.label))
 		}
 		if len(visible) > m.height {
 			b.WriteString(m.dimStyle.Render(fmt.Sprintf("  Showing %d-%d of %d", m.offset+1, end, len(visible))))
@@ -560,7 +930,7 @@ func (m *filePickerModel) View() tea.View {
 		b.WriteString("\n")
 	}
 	if m.err != "" {
-		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render(m.err))
+		b.WriteString(m.errorStyle.Render(m.err))
 		b.WriteString("\n")
 	}
 	return tea.NewView(b.String())
@@ -597,8 +967,7 @@ func (m *filePickerModel) visible() []filePickerEntry {
 	needle := strings.ToLower(strings.TrimSpace(m.filter))
 	var result []filePickerEntry
 	for _, entry := range m.entries {
-		label := strings.ToLower(entry.file.Name + " " + entry.file.Format.String())
-		if strings.Contains(label, needle) {
+		if strings.Contains(entry.searchText, needle) {
 			result = append(result, entry)
 		}
 	}
@@ -730,7 +1099,7 @@ func (m *filePickerModel) submit() {
 
 func (m *filePickerModel) openDir(path string) {
 	target := filepath.Clean(path)
-	entries, err := readPickerDir(target, m.startDir)
+	entries, err := readPickerDir(target, m.startDir, m.categoryStyles)
 	if err != nil {
 		m.err = err.Error()
 		return
@@ -786,35 +1155,67 @@ func pickerDirKey(path string) string {
 	return filepath.Clean(abs)
 }
 
+type formatPickerEntry struct {
+	choice      ports.FormatChoice
+	category    string
+	label       string
+	reasonLabel string
+	searchText  string
+}
+
 type formatPickerModel struct {
-	choices       []ports.FormatChoice
-	cursor        int
-	offset        int
-	height        int
-	filter        string
-	filtering     bool
-	pendingG      bool
-	err           string
-	aborted       bool
-	result        domain.Format
-	titleStyle    lipgloss.Style
-	numberStyle   lipgloss.Style
-	hintStyle     lipgloss.Style
-	available     lipgloss.Style
-	unavailable   lipgloss.Style
-	selectedStyle lipgloss.Style
+	choices                     []formatPickerEntry
+	categoryStyles              map[string]lipgloss.Style
+	categoryFaintStyles         map[string]lipgloss.Style
+	categorySelectedStyles      map[string]lipgloss.Style
+	categorySelectedFaintStyles map[string]lipgloss.Style
+	cursor                      int
+	offset                      int
+	height                      int
+	filter                      string
+	filtering                   bool
+	pendingG                    bool
+	err                         string
+	aborted                     bool
+	result                      domain.Format
+	titleStyle                  lipgloss.Style
+	numberStyle                 lipgloss.Style
+	hintStyle                   lipgloss.Style
+	unavailable                 lipgloss.Style
+	selectedStyle               lipgloss.Style
+	errorStyle                  lipgloss.Style
 }
 
 func newFormatPickerModel(p *Prompt, choices []ports.FormatChoice) *formatPickerModel {
+	entries := make([]formatPickerEntry, 0, len(choices))
+	for _, choice := range choices {
+		category := formatCategory(choice.Format)
+		label := formatChoiceLabel(choice.Format)
+		reasonLabel := label
+		if choice.Reason != "" {
+			reasonLabel += "  " + choice.Reason
+		}
+		entries = append(entries, formatPickerEntry{
+			choice:      choice,
+			category:    category,
+			label:       label,
+			reasonLabel: reasonLabel,
+			searchText:  strings.ToLower(choice.Format.String() + " " + category + " " + choice.Reason),
+		})
+	}
 	return &formatPickerModel{
-		choices:       choices,
-		height:        p.listHeight(6),
-		titleStyle:    p.titleStyle,
-		numberStyle:   p.numberStyle,
-		hintStyle:     p.hintStyle,
-		available:     lipgloss.NewStyle(),
-		unavailable:   lipgloss.NewStyle().Foreground(lipgloss.Color("245")),
-		selectedStyle: lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Bold(true),
+		choices:                     entries,
+		categoryStyles:              p.categoryStyles,
+		categoryFaintStyles:         p.categoryFaintStyles,
+		categorySelectedStyles:      p.categorySelectedStyles,
+		categorySelectedFaintStyles: p.categorySelectedFaintStyles,
+		height:                      p.listHeight(6),
+		titleStyle:                  p.titleStyle,
+		numberStyle:                 p.numberStyle,
+		hintStyle:                   p.hintStyle,
+		unavailable:                 p.unavailableStyle,
+		selectedStyle:               p.selectedStyle,
+		errorStyle:                  p.errorStyle,
 	}
 }
 
@@ -897,24 +1298,13 @@ func (m *formatPickerModel) View() tea.View {
 	} else {
 		end := minInt(len(visible), m.offset+m.height)
 		for i := m.offset; i < end; i++ {
-			choice := visible[i]
+			entry := visible[i]
 			cursor := "  "
 			if i == m.cursor {
 				cursor = m.numberStyle.Render("› ")
 			}
-			label := choice.Format.String()
-			if !choice.Available && choice.Reason != "" {
-				label += "  " + choice.Reason
-			}
-			style := m.available
-			if !choice.Available {
-				style = m.unavailable
-			}
-			if i == m.cursor && choice.Available {
-				style = m.selectedStyle
-			}
 			b.WriteString(cursor)
-			b.WriteString(style.Render(label))
+			b.WriteString(m.renderChoice(entry, i == m.cursor))
 			b.WriteString("\n")
 		}
 		if len(visible) > m.height {
@@ -923,7 +1313,7 @@ func (m *formatPickerModel) View() tea.View {
 		}
 	}
 	if m.err != "" {
-		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render(m.err))
+		b.WriteString(m.errorStyle.Render(m.err))
 		b.WriteString("\n")
 	}
 	return tea.NewView(b.String())
@@ -953,19 +1343,33 @@ func (m *formatPickerModel) updateFilter(msg tea.KeyPressMsg) {
 	}
 }
 
-func (m *formatPickerModel) visible() []ports.FormatChoice {
+func (m *formatPickerModel) visible() []formatPickerEntry {
 	if strings.TrimSpace(m.filter) == "" {
 		return m.choices
 	}
 	needle := strings.ToLower(strings.TrimSpace(m.filter))
-	var result []ports.FormatChoice
-	for _, choice := range m.choices {
-		label := strings.ToLower(choice.Format.String() + " " + choice.Reason)
-		if strings.Contains(label, needle) {
-			result = append(result, choice)
+	var result []formatPickerEntry
+	for _, entry := range m.choices {
+		if strings.Contains(entry.searchText, needle) {
+			result = append(result, entry)
 		}
 	}
 	return result
+}
+
+func (m *formatPickerModel) renderChoice(entry formatPickerEntry, selected bool) string {
+	if !entry.choice.Available {
+		return m.unavailable.Render(entry.reasonLabel)
+	}
+
+	category := entry.category
+	style := formatStyle(m.categoryStyles, category)
+	categoryStyle := formatStyle(m.categoryFaintStyles, category)
+	if selected {
+		style = formatStyle(m.categorySelectedStyles, category)
+		categoryStyle = formatStyle(m.categorySelectedFaintStyles, category)
+	}
+	return style.Render(entry.choice.Format.String()) + " " + categoryStyle.Render("("+category+")")
 }
 
 func (m *formatPickerModel) move(delta int) {
@@ -1007,23 +1411,38 @@ func (m *formatPickerModel) selectCurrent() {
 	if len(visible) == 0 || m.cursor < 0 || m.cursor >= len(visible) {
 		return
 	}
-	choice := visible[m.cursor]
-	m.result = choice.Format
+	entry := visible[m.cursor]
+	m.result = entry.choice.Format
 }
 
-func entriesFromFiles(files []domain.FileRef, includeParent bool) []filePickerEntry {
+func entriesFromFiles(files []domain.FileRef, includeParent bool, styles map[string]lipgloss.Style) []filePickerEntry {
 	entries := make([]filePickerEntry, 0, len(files)+1)
 	if includeParent {
-		entries = append(entries, filePickerEntry{file: domain.FileRef{Name: "..", Format: domain.FormatDir}, parent: true})
+		entries = append(entries, newFilePickerEntry(domain.FileRef{Name: "..", Format: domain.FormatDir}, true, styles))
 	}
 	for _, file := range files {
-		entries = append(entries, filePickerEntry{file: file})
+		entries = append(entries, newFilePickerEntry(file, false, styles))
 	}
 	sortPickerEntries(entries)
 	return entries
 }
 
-func readPickerDir(path string, startDir string) ([]filePickerEntry, error) {
+func newFilePickerEntry(file domain.FileRef, parent bool, styles map[string]lipgloss.Style) filePickerEntry {
+	label := file.Name
+	if file.Format == domain.FormatDir && !strings.HasSuffix(label, "/") {
+		label += "/"
+	}
+	searchText := strings.ToLower(label + " " + file.Format.String() + " " + formatCategory(file.Format))
+	return filePickerEntry{
+		file:        file,
+		parent:      parent,
+		label:       label,
+		searchText:  searchText,
+		formatLabel: formatLabel(styles, file.Format),
+	}
+}
+
+func readPickerDir(path string, startDir string, styles map[string]lipgloss.Style) ([]filePickerEntry, error) {
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		return nil, err
@@ -1043,16 +1462,13 @@ func readPickerDir(path string, startDir string) ([]filePickerEntry, error) {
 		})
 	}
 
-	result := entriesFromFiles(files, false)
+	result := entriesFromFiles(files, false, styles)
 	if canShowParent(path, startDir) {
-		result = append([]filePickerEntry{{
-			file: domain.FileRef{
-				Path:   filepath.Dir(filepath.Clean(path)),
-				Name:   "..",
-				Format: domain.FormatDir,
-			},
-			parent: true,
-		}}, result...)
+		result = append([]filePickerEntry{newFilePickerEntry(domain.FileRef{
+			Path:   filepath.Dir(filepath.Clean(path)),
+			Name:   "..",
+			Format: domain.FormatDir,
+		}, true, styles)}, result...)
 	}
 	return result, nil
 }
@@ -1119,52 +1535,79 @@ func fileFormatColumn(format domain.Format) string {
 	return fmt.Sprintf("%-5s", label)
 }
 
-func formatLabel(format domain.Format) string {
-	return lipgloss.NewStyle().Foreground(lipgloss.Color(formatColor(format))).Render(fileFormatColumn(format))
+func formatLabel(styles map[string]lipgloss.Style, format domain.Format) string {
+	return formatStyle(styles, formatCategory(format)).Render(fileFormatColumn(format))
 }
 
-func formatColor(format domain.Format) string {
-	if format == domain.FormatDir {
-		return "111"
+func formatChoiceLabel(format domain.Format) string {
+	return format.String() + " (" + formatCategory(format) + ")"
+}
+
+func formatCategory(format domain.Format) string {
+	switch format {
+	case domain.FormatDir:
+		return "directory"
+	case domain.FormatGIF, domain.FormatAPNG:
+		return "animation"
 	}
-	if format.IsImage() {
-		return "205"
+	if format.IsImage() || format == domain.FormatSVG {
+		return "image"
+	}
+	if format.IsVideo() {
+		return "video"
+	}
+	if format.IsAudio() {
+		return "audio"
 	}
 	if format.IsArchive() {
-		return "214"
-	}
-	if format.IsAudio() || format.IsVideo() {
-		return "170"
+		return "archive"
 	}
 	if format.IsFont() {
-		return "45"
+		return "font"
 	}
 	if format.IsDiskImage() {
-		return "196"
+		return "disk"
 	}
 	switch format {
-	case domain.FormatTXT, domain.FormatMD, domain.FormatHTML, domain.FormatRTF, domain.FormatTEX, domain.FormatDOCX, domain.FormatODT, domain.FormatPDF, domain.FormatEPUB, domain.FormatFB2:
-		return "42"
-	case domain.FormatJSON, domain.FormatYAML, domain.FormatTOML, domain.FormatCSV, domain.FormatINI, domain.FormatXML, domain.FormatPLIST, domain.FormatSQL, domain.FormatSQLite:
-		return "39"
+	case domain.FormatEPUB, domain.FormatFB2, domain.FormatMOBI, domain.FormatAZW3, domain.FormatDJVU:
+		return "ebook"
+	case domain.FormatTXT, domain.FormatMD, domain.FormatHTML, domain.FormatRTF, domain.FormatTEX, domain.FormatDOCX, domain.FormatODT, domain.FormatPDF, domain.FormatPPTX:
+		return "doc"
+	case domain.FormatXLSX, domain.FormatODS:
+		return "spreadsheet"
+	case domain.FormatJSON, domain.FormatYAML, domain.FormatTOML, domain.FormatCSV, domain.FormatINI, domain.FormatXML, domain.FormatPLIST, domain.FormatSQL, domain.FormatSQLite, domain.FormatParquet, domain.FormatAvro, domain.FormatORC, domain.FormatArrow, domain.FormatFeather, domain.FormatBSON, domain.FormatMsgpack, domain.FormatCBOR:
+		return "data"
 	case domain.FormatGeoJSON, domain.FormatTopoJSON, domain.FormatKML, domain.FormatKMZ, domain.FormatGPX, domain.FormatSHP, domain.FormatGPKG, domain.FormatGML, domain.FormatOSM, domain.FormatPBF, domain.FormatMBTiles, domain.FormatPMTiles, domain.FormatMVT, domain.FormatWKT, domain.FormatWKB, domain.FormatLAS, domain.FormatLAZ, domain.FormatHGT:
-		return "70"
+		return "geo"
 	case domain.FormatOpenAPI, domain.FormatSwagger, domain.FormatJSONSchema, domain.FormatAsyncAPI, domain.FormatGraphQL, domain.FormatProto, domain.FormatProtoSet, domain.FormatThrift, domain.FormatAvroSchema, domain.FormatFlatBuffers, domain.FormatCapnp, domain.FormatWSDL, domain.FormatXSD:
-		return "99"
+		return "schema"
+	case domain.FormatOVA, domain.FormatOVF, domain.FormatVBox, domain.FormatVagrantBox:
+		return "vm"
 	}
-	colors := []string{"33", "38", "81", "105", "141", "177", "203", "209", "215", "221"}
-	return colors[formatHash(format)%len(colors)]
+	return "custom"
 }
 
-func formatHash(format domain.Format) int {
-	hash := 0
-	for _, r := range format.String() {
-		hash = hash*31 + int(r)
+func categoryStyleMaps(palette theme.Palette) (map[string]lipgloss.Style, map[string]lipgloss.Style, map[string]lipgloss.Style, map[string]lipgloss.Style) {
+	categories := []string{"directory", "image", "animation", "video", "audio", "archive", "font", "disk", "vm", "doc", "ebook", "spreadsheet", "data", "geo", "schema", "custom"}
+	base := make(map[string]lipgloss.Style, len(categories))
+	faint := make(map[string]lipgloss.Style, len(categories))
+	selected := make(map[string]lipgloss.Style, len(categories))
+	selectedFaint := make(map[string]lipgloss.Style, len(categories))
+	for _, category := range categories {
+		style := lipgloss.NewStyle().Foreground(lipgloss.Color(palette.CategoryColor(category)))
+		base[category] = style
+		faint[category] = style.Faint(true)
+		selected[category] = style.Bold(true)
+		selectedFaint[category] = style.Faint(true).Bold(true)
 	}
-	if hash < 0 {
-		return -hash
+	return base, faint, selected, selectedFaint
+}
+
+func formatStyle(styles map[string]lipgloss.Style, category string) lipgloss.Style {
+	if style, ok := styles[category]; ok {
+		return style
 	}
-	return hash
+	return styles["custom"]
 }
 
 func sortPickerEntries(entries []filePickerEntry) {
@@ -1193,28 +1636,6 @@ func canShowParent(path string, startDir string) bool {
 	return filepath.Clean(pathAbs) != filepath.Clean(startAbs)
 }
 
-func (p *Prompt) runField(ctx context.Context, field huh.Field) error {
-	keymap := huh.NewDefaultKeyMap()
-	keymap.Quit = key.NewBinding(key.WithKeys("ctrl+c", "q"), key.WithHelp("q", "quit"))
-
-	form := huh.NewForm(huh.NewGroup(field)).
-		WithInput(p.source).
-		WithOutput(p.out).
-		WithKeyMap(keymap).
-		WithAccessible(os.Getenv("CONVERT_ACCESSIBLE") != "").
-		WithShowHelp(true).
-		WithHeight(p.formHeight()).
-		WithWidth(90)
-
-	if err := form.RunWithContext(ctx); err != nil {
-		if errors.Is(err, huh.ErrUserAborted) {
-			return ports.ErrUserAborted
-		}
-		return err
-	}
-	return nil
-}
-
 func (p *Prompt) selectFilesFallback(ctx context.Context, files []domain.FileRef) ([]domain.FileRef, error) {
 	fmt.Fprintln(p.out, p.titleStyle.Render("Select input files"))
 	for i, file := range files {
@@ -1226,7 +1647,7 @@ func (p *Prompt) selectFilesFallback(ctx context.Context, files []domain.FileRef
 			p.out,
 			"  %s %s %s\n",
 			p.numberStyle.Render(fmt.Sprintf("%d.", i+1)),
-			formatLabel(file.Format),
+			formatLabel(p.categoryStyles, file.Format),
 			name,
 		)
 	}
@@ -1253,9 +1674,12 @@ func (p *Prompt) selectFilesFallback(ctx context.Context, files []domain.FileRef
 func (p *Prompt) selectFormatFallback(ctx context.Context, choices []ports.FormatChoice) (domain.Format, error) {
 	fmt.Fprintln(p.out, p.titleStyle.Render("Select output format"))
 	for i, choice := range choices {
-		label := choice.Format.String()
+		label := formatStyle(p.categoryStyles, formatCategory(choice.Format)).Render(formatChoiceLabel(choice.Format))
 		if !choice.Available {
-			label += " " + p.hintStyle.Render("unavailable: "+choice.Reason)
+			label = p.hintStyle.Render(formatChoiceLabel(choice.Format))
+			if choice.Reason != "" {
+				label += " " + p.hintStyle.Render("unavailable: "+choice.Reason)
+			}
 		}
 		fmt.Fprintf(p.out, "  %s %s\n", p.numberStyle.Render(fmt.Sprintf("%d.", i+1)), label)
 	}
@@ -1278,10 +1702,6 @@ func (p *Prompt) hasTerminal() bool {
 
 func (p *Prompt) listHeight(reserve int) int {
 	return maxInt(4, p.terminalHeight(18)-reserve)
-}
-
-func (p *Prompt) formHeight() int {
-	return maxInt(8, p.terminalHeight(18)-1)
 }
 
 func (p *Prompt) terminalHeight(fallback int) int {

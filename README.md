@@ -53,6 +53,8 @@ This creates `./convert` in the current directory.
 - Files without an extension, or with an unknown unsupported extension, are treated as `txt` when their contents look like plain text.
 - Batch mode is tolerant: supported files are converted, unsupported or failed files are reported at the end.
 - A status report is always printed at the end.
+- Before terminal conversions start, `convert` shows the selected backend and planned command with option flags split onto indented lines. You can proceed, cancel that job, or edit supported commands; edited commands run through the shell for that job. Non-terminal runs proceed without prompting.
+- If a generated output path already exists in terminal mode, `convert` asks for a different output path instead of failing immediately.
 - If an archive is provided as the only input, interactive mode offers extraction.
 - If a directory is provided with an archive output format, it creates an archive.
 - If input and output image formats match, interactive mode offers compress, resize, or convert/copy.

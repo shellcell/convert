@@ -9,6 +9,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/shellcell/convert/internal/domain"
+	"github.com/shellcell/convert/internal/theme"
 	"golang.org/x/term"
 )
 
@@ -27,14 +28,18 @@ type Reporter struct {
 	dimStyle  lipgloss.Style
 }
 
-func New(out io.Writer) *Reporter {
+func New(out io.Writer, palettes ...theme.Palette) *Reporter {
+	palette := theme.Default()
+	if len(palettes) > 0 {
+		palette = palettes[0]
+	}
 	return &Reporter{
 		out:       out,
 		terminal:  isTerminal(out),
-		okStyle:   lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("42")),
-		failStyle: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("196")),
-		skipStyle: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214")),
-		dimStyle:  lipgloss.NewStyle().Foreground(lipgloss.Color("245")),
+		okStyle:   lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(palette.OK)),
+		failStyle: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(palette.Fail)),
+		skipStyle: lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(palette.Skip)),
+		dimStyle:  lipgloss.NewStyle().Foreground(lipgloss.Color(palette.Dim)),
 	}
 }
 

@@ -28,15 +28,15 @@ func (a *App) Run(ctx context.Context, args []string, stdin io.Reader, stdout io
 	runner := execadapter.NewRunner()
 	fs := fsadapter.NewFileSystem()
 	discovery := fsadapter.NewDiscovery()
-	prompt := promptadapter.New(stdin, stdout)
-	progress := progressadapter.New(stdout)
+	preferences, palette, err := settings.Load()
+	if err != nil {
+		fmt.Fprintf(stderr, "warning: could not load settings: %v\n", err)
+	}
+	prompt := promptadapter.New(stdin, stdout, palette)
+	progress := progressadapter.New(stdout, palette)
 	configured, err := toolconfig.Load(runner)
 	if err != nil {
 		fmt.Fprintf(stderr, "warning: could not load tool config: %v\n", err)
-	}
-	preferences, err := settings.Load()
-	if err != nil {
-		fmt.Fprintf(stderr, "warning: could not load settings: %v\n", err)
 	}
 	advisor := installadapter.NewAdvisor(configured.InstallHints)
 
@@ -58,6 +58,6 @@ func (a *App) Run(ctx context.Context, args []string, stdin io.Reader, stdout io
 	converterList = append(converterList, configured.Converters...)
 
 	service := app.NewService(converterList, discovery, fs, prompt, runner, advisor, preferences, progress)
-	cliRunner := cli.NewRunner(service, fs, stdin, stdout, stderr)
+	cliRunner := cli.NewRunner(service, fs, stdin, stdout, stderr, palette)
 	return cliRunner.Run(ctx, args)
 }

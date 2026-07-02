@@ -147,12 +147,34 @@ func (c *DynamicConverter) CanConvert(input domain.Format, output domain.Format)
 }
 
 func (c *DynamicConverter) Convert(ctx context.Context, job domain.ConvertJob) (domain.ConversionResult, error) {
+	command, err := c.command(job)
+	if err != nil {
+		return domain.ConversionResult{}, err
+	}
+
+	result, err := c.runner.Run(ctx, command)
+	if err != nil {
+		return domain.ConversionResult{}, dynamicCommandError(command, result, err)
+	}
+
+	return domain.ConversionResult{Job: job, Backend: c.id, OutputPath: job.OutputPath}, nil
+}
+
+func (c *DynamicConverter) PreviewCommands(job domain.ConvertJob) ports.CommandPreview {
+	command, err := c.command(job)
+	if err != nil {
+		return ports.CommandPreview{}
+	}
+	return ports.CommandPreview{Commands: []ports.Command{command}, Editable: true}
+}
+
+func (c *DynamicConverter) command(job domain.ConvertJob) (ports.Command, error) {
 	command := c.template.Command
 	if command == "" && len(c.commands) > 0 {
 		command = c.commands[0]
 	}
 	if command == "" {
-		return domain.ConversionResult{}, fmt.Errorf("%s has no command", c.id)
+		return ports.Command{}, fmt.Errorf("%s has no command", c.id)
 	}
 
 	argTemplates := argsOrDefault(c.template.Args)
@@ -161,19 +183,11 @@ func (c *DynamicConverter) Convert(ctx context.Context, job domain.ConvertJob) (
 		args = append(args, expand(arg, job))
 	}
 
-	result, err := c.runner.Run(ctx, ports.Command{
+	return ports.Command{
 		Name: expand(command, job),
 		Args: args,
 		Dir:  expand(c.template.Dir, job),
-	})
-	if err != nil {
-		if result.Stderr != "" {
-			return domain.ConversionResult{}, fmt.Errorf("%w: %s", err, result.Stderr)
-		}
-		return domain.ConversionResult{}, err
-	}
-
-	return domain.ConversionResult{Job: job, Backend: c.id, OutputPath: job.OutputPath}, nil
+	}, nil
 }
 
 func configPaths() ([]string, error) {
@@ -330,6 +344,35 @@ func expand(value string, job domain.ConvertJob) string {
 	value = strings.ReplaceAll(value, "{resize}", job.Options.Resize)
 	value = strings.ReplaceAll(value, "{action}", job.Options.Action.String())
 	return value
+}
+
+func dynamicCommandError(command ports.Command, result ports.CommandResult, err error) error {
+	if err == nil {
+		return nil
+	}
+	message := fmt.Sprintf("command: %s", dynamicCommandLine(command))
+	if result.Stderr != "" {
+		return fmt.Errorf("%s: %w: %s", message, err, result.Stderr)
+	}
+	if result.Stdout != "" {
+		return fmt.Errorf("%s: %w: %s", message, err, result.Stdout)
+	}
+	return fmt.Errorf("%s: %w", message, err)
+}
+
+func dynamicCommandLine(command ports.Command) string {
+	parts := []string{command.Name}
+	parts = append(parts, command.Args...)
+	for i, part := range parts {
+		if part == "" || strings.ContainsAny(part, " \t\n\"'\\$`") {
+			parts[i] = strconv.Quote(part)
+		}
+	}
+	line := strings.Join(parts, " ")
+	if command.Dir != "" {
+		return "cd " + strconv.Quote(command.Dir) + " && " + line
+	}
+	return line
 }
 
 func installCommand(install InstallConfig) string {
