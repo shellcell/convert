@@ -10,6 +10,16 @@ github.com/shellcell/convert
 
 It uses clean layered architecture and delegates actual conversion work to external tools when appropriate. The CLI is interactive, but intentionally not a full-screen TUI. Interactive selectors use Huh v2, and reports are styled with Lip Gloss v2.
 
+## Installation
+
+```sh
+# From source (Go 1.26+)
+go install github.com/shellcell/convert/cmd/convert@latest
+
+# Homebrew
+brew install shellcell/tap/convert
+```
+
 ## Build
 
 ```bash
