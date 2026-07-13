@@ -3,8 +3,8 @@ package converters
 import (
 	"context"
 
-	"github.com/shellcell/convert/internal/domain"
-	"github.com/shellcell/convert/internal/ports"
+	"github.com/shellcell/cnvrt/internal/domain"
+	"github.com/shellcell/cnvrt/internal/ports"
 )
 
 // Mermaid renders Mermaid diagram files through the mermaid-cli (mmdc).

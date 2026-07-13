@@ -5,7 +5,7 @@ import (
 	"errors"
 	"io"
 
-	"github.com/shellcell/convert/internal/domain"
+	"github.com/shellcell/cnvrt/internal/domain"
 )
 
 var ErrUserAborted = errors.New("user aborted")

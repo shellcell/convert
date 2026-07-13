@@ -1,4 +1,4 @@
-module github.com/shellcell/convert
+module github.com/shellcell/cnvrt
 
 go 1.25.8
 

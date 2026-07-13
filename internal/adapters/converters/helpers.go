@@ -9,9 +9,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/shellcell/convert/internal/domain"
-	"github.com/shellcell/convert/internal/ports"
-	"github.com/shellcell/convert/internal/shell"
+	"github.com/shellcell/cnvrt/internal/domain"
+	"github.com/shellcell/cnvrt/internal/ports"
+	"github.com/shellcell/cnvrt/internal/shell"
 )
 
 func hasCapability(capabilities []domain.ConversionCapability, input domain.Format, output domain.Format) bool {

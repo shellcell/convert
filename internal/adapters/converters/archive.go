@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/shellcell/convert/internal/domain"
+	"github.com/shellcell/cnvrt/internal/domain"
 )
 
 type Archive struct {

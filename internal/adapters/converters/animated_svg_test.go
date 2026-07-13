@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/shellcell/convert/internal/domain"
+	"github.com/shellcell/cnvrt/internal/domain"
 )
 
 func TestAnimatedSVGCapabilitiesOnlyForAnimatedSVG(t *testing.T) {

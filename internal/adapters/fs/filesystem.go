@@ -11,8 +11,8 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/shellcell/convert/internal/domain"
-	"github.com/shellcell/convert/internal/scan"
+	"github.com/shellcell/cnvrt/internal/domain"
+	"github.com/shellcell/cnvrt/internal/scan"
 )
 
 type FileSystem struct{}

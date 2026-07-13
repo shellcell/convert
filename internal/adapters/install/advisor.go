@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"sort"
 
-	"github.com/shellcell/convert/internal/ports"
+	"github.com/shellcell/cnvrt/internal/ports"
 )
 
 type Advisor struct {

@@ -1,6 +1,6 @@
 GO ?= go
-APP := convert
-CMD := ./cmd/convert
+APP := cnvrt
+CMD := ./cmd/cnvrt
 DIST := dist
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || printf dev)
 GOARM ?= 7

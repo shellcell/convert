@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/shellcell/convert/internal/domain"
+	"github.com/shellcell/cnvrt/internal/domain"
 )
 
 func convertStructured(t *testing.T, name string, content string, input domain.Format, output domain.Format, options domain.ToolOptions) string {

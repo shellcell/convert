@@ -3,8 +3,8 @@ package converters
 import (
 	"context"
 
-	"github.com/shellcell/convert/internal/domain"
-	"github.com/shellcell/convert/internal/ports"
+	"github.com/shellcell/cnvrt/internal/domain"
+	"github.com/shellcell/cnvrt/internal/ports"
 )
 
 type GDAL struct {

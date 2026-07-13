@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/shellcell/convert/internal/ports"
+	"github.com/shellcell/cnvrt/internal/ports"
 )
 
 // Command wraps a raw command line for execution through the platform shell.

@@ -4,7 +4,7 @@ import (
 	"context"
 	"os"
 
-	"github.com/shellcell/convert/internal/bootstrap"
+	"github.com/shellcell/cnvrt/internal/bootstrap"
 )
 
 func main() {

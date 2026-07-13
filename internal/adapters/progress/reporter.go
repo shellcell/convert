@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
-	"github.com/shellcell/convert/internal/domain"
-	"github.com/shellcell/convert/internal/theme"
+	"github.com/shellcell/cnvrt/internal/domain"
+	"github.com/shellcell/cnvrt/internal/theme"
 	"golang.org/x/term"
 )
 

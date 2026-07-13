@@ -8,9 +8,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/shellcell/convert/internal/domain"
-	"github.com/shellcell/convert/internal/ports"
-	"github.com/shellcell/convert/internal/shell"
+	"github.com/shellcell/cnvrt/internal/domain"
+	"github.com/shellcell/cnvrt/internal/ports"
+	"github.com/shellcell/cnvrt/internal/shell"
 )
 
 type Service struct {
@@ -134,13 +134,13 @@ func NewService(converters []ports.Converter, discovery ports.FileDiscovery, fs 
 		progress = ports.NoopProgressReporter{}
 	}
 	return &Service{
-		converters:  converters,
-		discovery:   discovery,
-		fs:          fs,
-		prompt:      prompt,
-		runner:      runner,
-		advisor:     advisor,
-		preferences: preferences,
+		converters:    converters,
+		discovery:     discovery,
+		fs:            fs,
+		prompt:        prompt,
+		runner:        runner,
+		advisor:       advisor,
+		preferences:   preferences,
 		progress:      progress,
 		formatCache:   map[string]domain.Format{},
 		backendChoice: map[string]string{},

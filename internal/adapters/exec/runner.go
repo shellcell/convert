@@ -8,7 +8,7 @@ import (
 	"os/exec"
 	"sync"
 
-	"github.com/shellcell/convert/internal/ports"
+	"github.com/shellcell/cnvrt/internal/ports"
 )
 
 type lookPathResult struct {
@@ -17,8 +17,8 @@ type lookPathResult struct {
 }
 
 type Runner struct {
-	mu       sync.Mutex
-	lookups  map[string]lookPathResult
+	mu      sync.Mutex
+	lookups map[string]lookPathResult
 }
 
 func NewRunner() *Runner {

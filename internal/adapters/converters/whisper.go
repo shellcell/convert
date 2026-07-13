@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/shellcell/convert/internal/domain"
-	"github.com/shellcell/convert/internal/ports"
+	"github.com/shellcell/cnvrt/internal/domain"
+	"github.com/shellcell/cnvrt/internal/ports"
 )
 
 // Whisper transcribes audio (and the audio track of video) to text with the

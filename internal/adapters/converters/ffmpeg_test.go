@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/shellcell/convert/internal/domain"
+	"github.com/shellcell/cnvrt/internal/domain"
 )
 
 func TestFFmpegDoesNotDeclareAudioToVideo(t *testing.T) {

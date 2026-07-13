@@ -3,7 +3,7 @@ package converters
 import (
 	"testing"
 
-	"github.com/shellcell/convert/internal/domain"
+	"github.com/shellcell/cnvrt/internal/domain"
 )
 
 func TestCalibreDoesNotClaimPlainTextHTMLOrPDFOutput(t *testing.T) {

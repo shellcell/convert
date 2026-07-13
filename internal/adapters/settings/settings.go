@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/shellcell/convert/internal/app"
-	"github.com/shellcell/convert/internal/domain"
-	"github.com/shellcell/convert/internal/theme"
+	"github.com/shellcell/cnvrt/internal/app"
+	"github.com/shellcell/cnvrt/internal/domain"
+	"github.com/shellcell/cnvrt/internal/theme"
 )
 
 type Config struct {
@@ -123,7 +123,7 @@ func UserConfigPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(root, "convert", "settings.json"), nil
+	return filepath.Join(root, "cnvrt", "settings.json"), nil
 }
 
 // SaveUserConfig merges the given theme/show-help/backend-preference values
@@ -205,16 +205,16 @@ func configPaths() ([]string, error) {
 	var paths []string
 
 	if userConfig, err := os.UserConfigDir(); err == nil {
-		paths = appendIfExists(paths, filepath.Join(userConfig, "convert", "settings.json"))
+		paths = appendIfExists(paths, filepath.Join(userConfig, "cnvrt", "settings.json"))
 	}
 
 	wd, err := os.Getwd()
 	if err != nil {
 		return nil, err
 	}
-	paths = appendIfExists(paths, filepath.Join(wd, "convert.settings.json"))
+	paths = appendIfExists(paths, filepath.Join(wd, "cnvrt.settings.json"))
 
-	if env := os.Getenv("CONVERT_SETTINGS"); env != "" {
+	if env := os.Getenv("CNVRT_SETTINGS"); env != "" {
 		for _, path := range filepath.SplitList(env) {
 			if path != "" {
 				paths = append(paths, path)

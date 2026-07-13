@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/shellcell/convert/internal/domain"
-	"github.com/shellcell/convert/internal/ports"
+	"github.com/shellcell/cnvrt/internal/domain"
+	"github.com/shellcell/cnvrt/internal/ports"
 )
 
 type Result struct {
@@ -201,7 +201,7 @@ func (c *DynamicConverter) command(job domain.ConvertJob) (ports.Command, error)
 func configPaths() ([]string, error) {
 	var paths []string
 
-	if env := os.Getenv("CONVERT_TOOL_CONFIG"); env != "" {
+	if env := os.Getenv("CNVRT_TOOL_CONFIG"); env != "" {
 		for _, path := range filepath.SplitList(env) {
 			if path != "" {
 				paths = append(paths, path)
@@ -213,8 +213,8 @@ func configPaths() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	paths = appendIfExists(paths, filepath.Join(wd, "convert.tools.json"))
-	paths = appendGlob(paths, filepath.Join(wd, "convert.tools.d", "*.json"))
+	paths = appendIfExists(paths, filepath.Join(wd, "cnvrt.tools.json"))
+	paths = appendGlob(paths, filepath.Join(wd, "cnvrt.tools.d", "*.json"))
 
 	if root, err := userConfigRoot(); err == nil {
 		paths = appendIfExists(paths, filepath.Join(root, "tools.json"))
@@ -231,7 +231,7 @@ func userConfigRoot() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(userConfig, "convert"), nil
+	return filepath.Join(userConfig, "cnvrt"), nil
 }
 
 func userToolsDir() (string, error) {

@@ -5,17 +5,17 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/shellcell/convert/internal/adapters/cli"
-	"github.com/shellcell/convert/internal/adapters/converters"
-	execadapter "github.com/shellcell/convert/internal/adapters/exec"
-	fsadapter "github.com/shellcell/convert/internal/adapters/fs"
-	installadapter "github.com/shellcell/convert/internal/adapters/install"
-	progressadapter "github.com/shellcell/convert/internal/adapters/progress"
-	promptadapter "github.com/shellcell/convert/internal/adapters/prompt"
-	"github.com/shellcell/convert/internal/adapters/settings"
-	"github.com/shellcell/convert/internal/adapters/toolconfig"
-	"github.com/shellcell/convert/internal/app"
-	"github.com/shellcell/convert/internal/ports"
+	"github.com/shellcell/cnvrt/internal/adapters/cli"
+	"github.com/shellcell/cnvrt/internal/adapters/converters"
+	execadapter "github.com/shellcell/cnvrt/internal/adapters/exec"
+	fsadapter "github.com/shellcell/cnvrt/internal/adapters/fs"
+	installadapter "github.com/shellcell/cnvrt/internal/adapters/install"
+	progressadapter "github.com/shellcell/cnvrt/internal/adapters/progress"
+	promptadapter "github.com/shellcell/cnvrt/internal/adapters/prompt"
+	"github.com/shellcell/cnvrt/internal/adapters/settings"
+	"github.com/shellcell/cnvrt/internal/adapters/toolconfig"
+	"github.com/shellcell/cnvrt/internal/app"
+	"github.com/shellcell/cnvrt/internal/ports"
 )
 
 type App struct{}

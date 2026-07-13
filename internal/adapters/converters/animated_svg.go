@@ -21,9 +21,9 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/shellcell/convert/internal/domain"
-	"github.com/shellcell/convert/internal/ports"
-	"github.com/shellcell/convert/internal/scan"
+	"github.com/shellcell/cnvrt/internal/domain"
+	"github.com/shellcell/cnvrt/internal/ports"
+	"github.com/shellcell/cnvrt/internal/scan"
 )
 
 type AnimatedSVG struct {

@@ -12,12 +12,12 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
-	"github.com/shellcell/convert/internal/adapters/settings"
-	"github.com/shellcell/convert/internal/adapters/toolconfig"
-	"github.com/shellcell/convert/internal/app"
-	"github.com/shellcell/convert/internal/domain"
-	"github.com/shellcell/convert/internal/ports"
-	"github.com/shellcell/convert/internal/theme"
+	"github.com/shellcell/cnvrt/internal/adapters/settings"
+	"github.com/shellcell/cnvrt/internal/adapters/toolconfig"
+	"github.com/shellcell/cnvrt/internal/app"
+	"github.com/shellcell/cnvrt/internal/domain"
+	"github.com/shellcell/cnvrt/internal/ports"
+	"github.com/shellcell/cnvrt/internal/theme"
 )
 
 type Runner struct {
@@ -159,7 +159,7 @@ type parsedRequest struct {
 }
 
 func (r *Runner) parse(args []string) (parsedRequest, bool, error) {
-	flags := flag.NewFlagSet("convert", flag.ContinueOnError)
+	flags := flag.NewFlagSet("cnvrt", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 
 	inputFormatFlag := flags.String("i", "", "input format")
@@ -325,13 +325,13 @@ func (r *Runner) printUsage() {
 
 func (r *Runner) printUsageTo(w io.Writer) {
 	fmt.Fprintln(w, "Usage:")
-	fmt.Fprintln(w, "  convert")
-	fmt.Fprintln(w, "  convert input.svg output.png")
-	fmt.Fprintln(w, "  convert input.svg")
-	fmt.Fprintln(w, "  convert -i svg -o png abc.svg cde.svg")
-	fmt.Fprintln(w, "  convert -o png")
-	fmt.Fprintln(w, "  convert -o png ../../")
-	fmt.Fprintln(w, "  convert -o zip ./directory")
+	fmt.Fprintln(w, "  cnvrt")
+	fmt.Fprintln(w, "  cnvrt input.svg output.png")
+	fmt.Fprintln(w, "  cnvrt input.svg")
+	fmt.Fprintln(w, "  cnvrt -i svg -o png abc.svg cde.svg")
+	fmt.Fprintln(w, "  cnvrt -o png")
+	fmt.Fprintln(w, "  cnvrt -o png ../../")
+	fmt.Fprintln(w, "  cnvrt -o zip ./directory")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Flags:")
 	fmt.Fprintln(w, "  -i, --input-format   override input format")
@@ -532,7 +532,7 @@ func parseInstallConfigs(value string) []toolconfig.InstallConfig {
 // editConfig interactively updates the user settings file.
 func (r *Runner) editConfig() int {
 	reader := bufio.NewReader(r.stdin)
-	fmt.Fprintln(r.stdout, r.titleStyle.Render("Configure convert"))
+	fmt.Fprintln(r.stdout, r.titleStyle.Render("Configure cnvrt"))
 	if path, err := settings.UserConfigPath(); err == nil {
 		fmt.Fprintln(r.stdout, r.dimStyle.Render("Settings file: "+path))
 	}

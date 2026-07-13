@@ -15,8 +15,8 @@ import (
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
-	"github.com/shellcell/convert/internal/domain"
-	"github.com/shellcell/convert/internal/ports"
+	"github.com/shellcell/cnvrt/internal/domain"
+	"github.com/shellcell/cnvrt/internal/ports"
 	ini "gopkg.in/ini.v1"
 	"gopkg.in/yaml.v3"
 	"howett.net/plist"
