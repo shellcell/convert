@@ -17,7 +17,7 @@ RELEASE_TARGETS := \
 	darwin-amd64 \
 	darwin-arm64
 
-.PHONY: build build-debug test vet mandoc clean release build-release checksums $(RELEASE_TARGETS)
+.PHONY: build build-debug test vet mandoc clean release build-release checksums packages $(RELEASE_TARGETS)
 
 build:
 	$(GO) build -trimpath -ldflags="$(LDFLAGS)" -o $(APP) $(CMD)
@@ -67,6 +67,25 @@ checksums: build-release
 	else \
 		cd "$(DIST)" && sha256sum *.tar.gz > checksums.txt; \
 	fi
+
+# Build .deb/.rpm/.apk packages from the prebuilt linux binaries using nfpm.
+# Covers amd64 and arm64, which is what apt/dnf/apk users overwhelmingly need.
+# Override with `make packages NFPM_ARCHES="amd64"` to limit the set.
+NFPM_ARCHES ?= amd64 arm64
+PKG_VERSION ?= $(patsubst v%,%,$(VERSION))
+
+packages: | $(DIST)
+	@command -v nfpm >/dev/null 2>&1 || { printf 'nfpm is required to build packages: https://nfpm.goreleaser.com\n'; exit 1; }
+	@for arch in $(NFPM_ARCHES); do \
+		bin="$(DIST)/$(APP)-$(VERSION)-linux-$$arch/$(APP)"; \
+		[ -f "$$bin" ] || { printf 'missing %s; run make build-release first\n' "$$bin"; exit 1; }; \
+		for fmt in deb rpm apk; do \
+			printf 'packaging %s (%s)\n' "$$arch" "$$fmt"; \
+			PKG_VERSION="$(PKG_VERSION)" PKG_ARCH="$$arch" PKG_BIN="$$bin" \
+				envsubst < nfpm.yaml > "$(DIST)/nfpm.$$arch.$$fmt.yaml"; \
+			nfpm package -f "$(DIST)/nfpm.$$arch.$$fmt.yaml" -p "$$fmt" -t "$(DIST)"; \
+		done; \
+	done
 
 clean:
 	rm -rf "$(DIST)"
