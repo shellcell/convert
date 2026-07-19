@@ -4,15 +4,37 @@
 
 Run it with no arguments to pick files and an output format interactively, or pass paths and flags to convert straight away. Conversions are delegated to external tools when appropriate; structured data and archives are handled in-process with no dependencies.
 
-```sh
-# From source (Go 1.26+)
-go install github.com/shellcell/cnvrt/cmd/cnvrt@latest
+## Install
 
-# Homebrew
+### Homebrew (macOS / Linux)
+
+```sh
 brew install shellcell/tap/cnvrt
 ```
 
-Build from a clone with `make build` or `make build-debug` (unstripped). Both produce `./cnvrt`.
+### Linux packages (apt / dnf / apk)
+
+Enable the shellcell repository once — setup instructions at
+<https://packages.shellcell.dev> — then:
+
+```sh
+sudo apt install cnvrt   # Debian / Ubuntu
+sudo dnf install cnvrt   # Fedora / RHEL
+sudo apk add cnvrt       # Alpine
+```
+
+### Go
+
+```sh
+go install github.com/shellcell/cnvrt/cmd/cnvrt@latest   # Go 1.26+
+```
+
+### Prebuilt binaries
+
+Download the archive for your OS/arch from
+[Releases](https://github.com/shellcell/cnvrt/releases); each contains the
+binary, man page, and shell completions. Or build from a clone with
+`make build` (both `make build` and `make build-debug` produce `./cnvrt`).
 
 ## Usage
 
